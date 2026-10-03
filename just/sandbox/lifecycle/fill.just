@@ -4,10 +4,13 @@
 # Imported into the root justfile, so no `set` lines here and no local variables:
 # six phase files share one scope and a `repo :=` in each would collide.
 #
-# ONE kind of secret crosses the wire here: the host's provider API keys, mirrored
-# into the sandbox's pi registry so the sandbox's pi can call the host's model set.
-# The discipline is strict — stdin only, 0600, never echoed. See the header of
-# sandbox_mount/host/pi_mirror.py for the boundary rationale.
+# TWO shapes of secret cross the wire here. (1) The host's provider API keys,
+# mirrored into the sandbox's pi registry (models.json) so the sandbox's pi can
+# call the host's model set. (2) The allowlisted LLM key vars the engineer set in
+# the host .env, shipped as ENVIRONMENT VARIABLES into app/.env on the VM for
+# tools that read keys from the environment. The discipline is strict for both —
+# stdin only, 0600, never echoed. See the header of sandbox_mount/host/pi_mirror.py
+# for the registry boundary rationale.
 
 # clone the factory into the VM, optionally pin a sha, mirror the host pi registry: just sbx lifecycle fill <run-id> [sha]
 fill RUN_ID *SHA:
@@ -181,3 +184,36 @@ fill RUN_ID *SHA:
     echo "==> fill: ~/.pi/agent/models.json (mode/size: $MI_STAT) — host provider keys crossed (0600)"
     echo "==> fill: ~/.pi/agent/settings.json (mode/size: $SE_STAT)"
     echo "==> fill: /home/exedev/sssf_config.yaml (mode/size: $CF_STAT) — every agent's model pre-filled"
+
+    # ── ship .env-declared LLM API keys (optional) ─────────────────────────
+    # Keys the engineer set in the host .env cross as ENVIRONMENT VARIABLES into
+    # app/.env on the VM (0600, stdin only, never echoed). The pi registry
+    # mirror above stays the primary credential path; these serve anything that
+    # reads keys from the environment — `just adw` (dotenv-load), the ADW python
+    # (utils.load_dotenv -> operator_env), Claude Code (ANTHROPIC_API_KEY), SDKs.
+    # ALLOWLISTED on purpose: host-only overrides (PI_MODELS_PATH, SSSF_CONFIG,
+    # ENGINEER_NAME, PI_PATH) must never leak into the box.
+    LLM_KEY_VARS=(
+        ANTHROPIC_API_KEY OPENAI_API_KEY OPENROUTER_API_KEY
+        GEMINI_API_KEY GOOGLE_API_KEY DEEPSEEK_API_KEY ZAI_API_KEY
+        MOONSHOT_API_KEY KIMI_API_KEY MINIMAX_API_KEY MISTRAL_API_KEY
+        XAI_API_KEY
+    )
+    ENV_CONTENT=""
+    SHIPPED=()
+    for v in "${LLM_KEY_VARS[@]}"; do
+        val="${!v:-}"
+        if [ -n "$val" ]; then
+            ENV_CONTENT+="$v=$val"$'\n'
+            SHIPPED+=("$v")
+        fi
+    done
+    if [ "${#SHIPPED[@]}" -gt 0 ]; then
+        printf '%s' "$ENV_CONTENT" \
+            | ssh "$HOST" 'umask 077 && cat > "$HOME/app/.env" && chmod 600 "$HOME/app/.env"'
+        ENV_STAT=$(ssh "$HOST" 'stat -c "%a %s" "$HOME/app/.env"')
+        # NAMES only — a proof line that prints a value defeats the 0600.
+        echo "==> fill: app/.env (mode/size: $ENV_STAT) — env keys: ${SHIPPED[*]}"
+    else
+        echo "==> fill: no LLM key vars set in .env — skipping app/.env (pi mirror is the credential path)"
+    fi

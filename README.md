@@ -42,7 +42,7 @@ Once oriented, you operate the whole system by talking to the agent. Two skills 
 ### Manual Install
 
 ```bash
-cp .env.sample .env                  # optional overrides only; inference creds live in the host pi registry
+cp .env.sample .env                  # optional overrides plus optional LLM API keys that FILL provisions into each sandbox as app/.env
 cd apps/inkwell && bun install       # app deps
 just sbx manage doctor               # five-check preflight: ssh, helpers, provisioner, pi catalog, adw layer
 just inkwell test                    # 30 tests green = the payload works
@@ -61,7 +61,7 @@ Every resource this system leans on, what it does, and whether you actually need
 | [exe.dev account](https://exe.dev) | the disposable VMs the factory runs inside | required to mount | not needed |
 | [Claude Code](https://claude.com/claude-code) + [Pi](https://github.com/badlogic/pi-mono) | the coding agents that do the work | preinstalled on the VM | not needed |
 
-One credential is the entire reason the sandbox is safe: the **exe.dev account** lives only on your host, and the host pi agent's provider keys are mirrored into each sandbox by FILL. Everything else is a fast, free toolchain install. If you only want to understand the design, clone the repo and read: no account, nothing to spend.
+One credential is the entire reason the sandbox is safe: the **exe.dev account** lives only on your host, and the host pi agent's provider keys are mirrored into each sandbox by FILL. Besides that mirrored registry, any LLM API keys you declare in `.env` are also carried into each sandbox by FILL, written 0600 to `app/.env`. Everything else is a fast, free toolchain install. If you only want to understand the design, clone the repo and read: no account, nothing to spend.
 
 ---
 

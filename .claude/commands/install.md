@@ -54,7 +54,7 @@ Optional (only for a host-side orchestrator via `just local`; the VM image alrea
 
 ### Step 2 — Check Environment
 
-- If `.env` is missing, copy it: `cp .env.sample .env`, then tell the user which keys to fill.
+- If `.env` is missing, copy it: `cp .env.sample .env`, then tell the user which keys to fill. Besides the host-only provisioning key, `.env` may optionally carry an allowlisted set of LLM API keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `DEEPSEEK_API_KEY`, `ZAI_API_KEY`, `MOONSHOT_API_KEY`, `KIMI_API_KEY`, `MINIMAX_API_KEY`, `MISTRAL_API_KEY`, `XAI_API_KEY`) that FILL copies 0600 into each sandbox as `app/.env` for tools that read keys from the environment.
 - Confirm (never print) `OPENROUTER_PROVISIONING_KEY` is set and non-empty. Host-only, mints/revokes the per-run runtime keys. Get one at https://openrouter.ai/settings/keys.
   - If empty: `warn` — required only to mount a sandbox; fine to leave blank for read-and-observe.
 - `OPENROUTER_API_KEY` (optional): only for running ADWs locally via `just local` / `just adw`. Inside a sandbox it is overwritten by a minted, capped runtime key.

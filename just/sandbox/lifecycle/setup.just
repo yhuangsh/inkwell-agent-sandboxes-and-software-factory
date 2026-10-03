@@ -9,10 +9,11 @@
 # destroys a VM. On failure it prints how to get into the box and exits
 # non-zero, because a gate that auto-destroys throws away the evidence.
 #
-# The gate reads no host secret: C/D/E exercise the sandbox's own pi and its
-# mirrored registry (shipped by FILL), which is the only credential path. They
-# still run INSIDE the sandbox so the gate proves the sandbox's own egress works,
-# not the host's.
+# The gate reads no host secret: C/D/E exercise the sandbox's own pi and the
+# keys FILL shipped into app/.env, which is the only credential path. `ssh host
+# cmd` carries NO environment, so every pi call sources app/.env first. They still
+# run INSIDE the sandbox so the gate proves the sandbox's own egress works, not
+# the host's.
 
 # CONFIG picks which roster the gate checks. It has to be an ARGUMENT: C used to
 # read $SSSF_CONFIG out of the remote environment, but `ssh host 'cmd'` carries
@@ -53,7 +54,7 @@ setup RUN_ID CONFIG="":
       echo "[setup] the VM is still running on purpose — the evidence is on the box:" >&2
       echo "[setup]   ssh ${HOST}" >&2
       echo "[setup]   ssh ${HOST} 'cd app && git status --porcelain'" >&2
-      echo "[setup]   ssh ${HOST} 'pi --list-models'" >&2
+      echo "[setup]   ssh ${HOST} 'cd app && set -a && . ./.env && set +a && pi --list-models'" >&2
       echo "[setup] tear it down only when you are done: just sbx lifecycle teardown {{RUN_ID}}" >&2
       exit 1
     }
@@ -139,6 +140,9 @@ setup RUN_ID CONFIG="":
     echo "[gate] B pi --list-models is non-empty"
     if "${SSH[@]}" 'bash -s' <<'REMOTE_B'; then
     set -uo pipefail
+    # Keys live in app/.env; `ssh host cmd` carries no environment, so a fresh
+    # shell's `pi --list-models` lists NOTHING until .env is sourced. Source first.
+    set -a; [ -f "$HOME/app/.env" ] && . "$HOME/app/.env"; set +a
     # `command -v` first: without it a missing pi prints one line of
     # "command not found" and a bare non-empty check calls that a pass.
     command -v pi >/dev/null 2>&1 || { echo "   pi is not on PATH"; exit 1; }
@@ -148,25 +152,27 @@ setup RUN_ID CONFIG="":
       echo "   pi --list-models printed nothing"; exit 1
     fi
     if printf '%s' "$out" | grep -qi 'no models available'; then
-      echo "   pi says: No models available — ~/.pi/agent/models.json did not load"; exit 1
+      echo "   pi says: No models available — app/.env was not sourced or holds no keys"; exit 1
     fi
     echo "   ${n} lines from pi --list-models"
     REMOTE_B
-      echo "[gate] B PASS  pi model registry loaded"
+      echo "[gate] B PASS  pi built-in providers loaded from app/.env"
     else
       gate_fail "assertion B — pi --list-models empty or 'No models available'"
     fi
 
     # C, D, E run as ONE script inside the sandbox. C pings each roster model
-    # THROUGH the sandbox's own pi, D asks pi for a real cost, and E checks the
-    # registry's credentials. The gate exercises the sandbox's pi/egress directly;
-    # the only credentials it touches are the host-mirrored ones in models.json.
+    # THROUGH the sandbox's own pi, D asks pi for a real cost, and E checks that
+    # every roster provider has its env key. The gate exercises the sandbox's
+    # pi/egress directly; the only credentials it touches are app/.env's.
     echo "[gate] C roster ping   D non-zero cost   E credential coverage"
     if "${SSH[@]}" 'bash -s' {{ quote(CONFIG) }} <<'REMOTE_CDE'; then
     set -uo pipefail
     cd "$HOME/app" || { echo "   no ~/app on this VM"; exit 1; }
     command -v jq >/dev/null 2>&1 || { echo "   jq missing (it ships in the exeuntu image)"; exit 1; }
     command -v pi >/dev/null 2>&1 || { echo "   pi is not on PATH"; exit 1; }
+    # Keys live in app/.env; every pi call below needs them in the environment.
+    set -a; [ -f .env ] && . ./.env; set +a
 
     # $1 is the CONFIG argument, forwarded over ssh as a positional because the
     # remote shell inherits no environment. The caller may leave it empty.
@@ -181,11 +187,11 @@ setup RUN_ID CONFIG="":
     [ -n "$MODELS" ] || { echo "   parsed zero models out of ${CFG}"; exit 1; }
 
     # ── C: ping every model in the ACTIVE roster, THROUGH PI ─────────────────
-    # pi resolves the provider block, reads its apiKey, picks the api flavor
-    # (openai-completions AND anthropic-messages both appear in the host catalog),
-    # and hits the baseUrl — so ONE call verifies credential + baseUrl + api
-    # flavor + registry entry, which a single provider curl never could for a
-    # direct provider.
+    # pi resolves the provider, reads its api key from the environment, picks the
+    # api flavor (openai-completions AND anthropic-messages both appear across
+    # providers), and hits the baseUrl — so ONE call verifies credential + baseUrl
+    # + api flavor + built-in provider entry, which a single provider curl never
+    # could for a direct provider.
     ping_fail=0
     for m in $MODELS; do
       provider="${m%%/*}"; model="${m#*/}"
@@ -194,17 +200,16 @@ setup RUN_ID CONFIG="":
       if [ -n "$(printf '%s' "$resp" | tr -d '[:space:]')" ]; then
         echo "   pass  ${m}"
       else
-        echo "   FAIL  ${m}: pi returned no output (credential, baseUrl, api flavor, or registry entry)"
+        echo "   FAIL  ${m}: pi returned no output (credential, baseUrl, api flavor, or provider entry)"
         ping_fail=1
       fi
     done
 
     # ── D: pi actually REPORTS cost ──────────────────────────────────────────
     # The thing being guarded is precise: adw_modules/agent_pi.py reads
-    # usage.cost.total straight out of pi, and pi defaults every rate to ZERO
-    # when models.json carries no `cost` block. A factory in that state runs
-    # fine and reports $0.0000 forever while genuinely spending. Observed: a
-    # 463.6k-token run logged $0.0000.
+    # usage.cost.total straight out of pi. pi's built-in catalog carries the rate
+    # table, so a factory that reports $0.0000 forever while genuinely spending is
+    # the failure. Observed once: a 463.6k-token run logged $0.0000.
     #
     # Ask pi directly rather than diffing provider key usage (that rounds to $0
     # on a one-sentence call and would false-fail). The live call runs on the
@@ -225,53 +230,56 @@ setup RUN_ID CONFIG="":
                | jq -s '[.. | objects | select(has("cost")) | .cost.total // 0] | max // 0' \
                || echo 0)"
     if awk -v c="$pi_cost" 'BEGIN { exit !(c > 0) }'; then
-      echo "   pi reports cost \$${pi_cost} on a live call (rate table is loaded)"
+      echo "   pi reports cost \$${pi_cost} on a live call (built-in rate table loaded)"
     else
-      echo "   FAIL  pi reported cost 0 — models.json has no rate table, so every"
-      echo "         run will log \$0.0000 while really spending money"
+      echo "   FAIL  pi reported cost 0 on a live call — every run would log"
+      echo "         \$0.0000 while really spending money"
       cost_fail=1
     fi
-    # Second half: the registry itself. pi's schema requires ALL FOUR of
-    # input/output/cacheRead/cacheWrite together — a partial block fails
-    # validation and pi drops THE ENTIRE ROSTER, not just that model. The host
-    # catalog legitimately carries a few zero-rate models, so this asserts the
-    # SHAPE (all four keys on every model) and that the models the roster will
-    # actually call carry a non-zero input rate.
-    MJ="$HOME/.pi/agent/models.json"
-    if [ -f "$MJ" ] && jq -e '[.providers[].models[].cost
-          | has("input") and has("output") and has("cacheRead") and has("cacheWrite")] | all' \
-        "$MJ" >/dev/null 2>&1; then
-      echo "   rate table present: every model in models.json carries all four cost keys"
-    else
-      echo "   FAIL  models.json has a partial rate block — pi drops the whole roster"
-      cost_fail=1
-    fi
-    for m in $MODELS; do
-      provider="${m%%/*}"; model="${m#*/}"
-      rate="$(jq -r --arg p "$provider" --arg id "$model" \
-        '[.providers[$p].models[] | select(.id == $id) | (.cost.input // 0)] | first // 0' \
-        "$MJ" 2>/dev/null || echo 0)"
-      if awk -v r="$rate" 'BEGIN { exit !(r > 0) }'; then
-        :
-      else
-        echo "   FAIL  ${m} has a zero input rate in models.json — its runs log \$0.0000"
-        cost_fail=1
-      fi
-    done
 
-    # ── E: every roster provider has a credential ────────────────────────────
-    # Spend is no longer read from a provider key, so an old limit-minus-usage
-    # reading said nothing. What matters now is that every provider the roster
-    # calls carries a usable apiKey in the sandbox's registry — a keyless (or
-    # still-`env:`) provider fails at call time.
+    # ── E: every roster provider has a credential in the environment ─────────
+    # The sandbox pi reads its provider keys from env vars (pi built-ins); FILL
+    # wrote them to app/.env and this script sourced that file above. The
+    # provider -> env-var map is copied from pi's own getApiKeyEnvVars
+    # (pi-ai/dist/env-api-keys.js). setup.just gate E is one of TWO copies; the
+    # other is sandbox_mount/host/roster_keys.sh. Keep them in sync.
+    key_var_for() {
+      case "$1" in
+        deepseek)      echo DEEPSEEK_API_KEY ;;
+        zai)           echo ZAI_API_KEY ;;
+        zai-coding-cn) echo ZAI_CODING_CN_API_KEY ;;
+        kimi-coding)   echo KIMI_API_KEY ;;
+        minimax)       echo MINIMAX_API_KEY ;;
+        minimax-cn)    echo MINIMAX_CN_API_KEY ;;
+        openrouter)    echo OPENROUTER_API_KEY ;;
+        openai)        echo OPENAI_API_KEY ;;
+        anthropic)     echo ANTHROPIC_API_KEY ;;
+        google)        echo GEMINI_API_KEY ;;
+        mistral)       echo MISTRAL_API_KEY ;;
+        xai)           echo XAI_API_KEY ;;
+        moonshotai)    echo MOONSHOT_API_KEY ;;
+        groq)          echo GROQ_API_KEY ;;
+        cerebras)      echo CEREBRAS_API_KEY ;;
+        fireworks)     echo FIREWORKS_API_KEY ;;
+        together)      echo TOGETHER_API_KEY ;;
+        baseten)       echo BASETEN_API_KEY ;;
+        *) return 1 ;;
+      esac
+    }
     cred_fail=0
     PROVIDERS="$(printf '%s\n' "$MODELS" | sed 's|/.*||' | sort -u)"
     for p in $PROVIDERS; do
-      key="$(jq -r --arg p "$p" '.providers[$p].apiKey // ""' "$MJ" 2>/dev/null || echo '')"
-      case "$key" in
-        ""|env:*) echo "   FAIL  provider ${p} has no usable apiKey in models.json"; cred_fail=1 ;;
-        *)        echo "   credential present for ${p}" ;;
-      esac
+      if ! var="$(key_var_for "$p")"; then
+        echo "   FAIL  provider ${p} is not a known pi built-in — no env-var mapping"
+        cred_fail=1
+        continue
+      fi
+      if [ -n "${!var:-}" ]; then
+        echo "   credential present for ${p} (${var})"
+      else
+        echo "   FAIL  provider ${p} needs ${var}, unset in the sourced environment"
+        cred_fail=1
+      fi
     done
 
     [ "$ping_fail" -eq 0 ] || exit 2
@@ -279,16 +287,16 @@ setup RUN_ID CONFIG="":
     [ "$cred_fail" -eq 0 ] || exit 4
     REMOTE_CDE
       echo "[gate] C PASS  every roster model answered through pi"
-      echo "[gate] D PASS  non-zero cost and a loaded rate table"
-      echo "[gate] E PASS  every roster provider has a credential"
+      echo "[gate] D PASS  non-zero cost on a live call"
+      echo "[gate] E PASS  every roster provider has its env key"
     else
       # Exit code tells which of the three failed; the per-line FAIL output above
       # already named the model or the reading.
       rc=$?
       case "$rc" in
         2) gate_fail "assertion C — at least one roster model did not answer through pi" ;;
-        3) gate_fail "assertion D — pi reported no cost and/or models.json lacks rates" ;;
-        4) gate_fail "assertion E — a roster provider has no credential in models.json" ;;
+        3) gate_fail "assertion D — pi reported no cost on a live call" ;;
+        4) gate_fail "assertion E — a roster provider's env key is unset" ;;
         *) gate_fail "assertions C/D/E — the remote gate script exited ${rc} (see output above)" ;;
       esac
     fi

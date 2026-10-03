@@ -10,8 +10,8 @@ Set up this repo for development: the **Inkwell** app, the **[Super Simple Softw
 
 Two audiences, and the install serves both:
 
-- **Run the loop** (mount throwaway VMs and let agents ship code): needs the full toolchain plus an exe.dev account and an OpenRouter provisioning key.
-- **Read and observe** (understand the system, run the app and tests locally): needs only `git`, `bun`, and optionally `uv` + `just`. The exe.dev account and provisioning key are not required.
+- **Run the loop** (mount throwaway VMs and let agents ship code): needs the full toolchain plus an exe.dev account and the LLM API keys the active roster requires.
+- **Read and observe** (understand the system, run the app and tests locally): needs only `git`, `bun`, and optionally `uv` + `just`. The exe.dev account and roster keys are not required.
 
 Gate hard on the read-and-observe core. Treat the mount-only credentials as a warning, not a failure, so an observer is never blocked.
 
@@ -54,10 +54,9 @@ Optional (only for a host-side orchestrator via `just local`; the VM image alrea
 
 ### Step 2 — Check Environment
 
-- If `.env` is missing, copy it: `cp .env.sample .env`, then tell the user which keys to fill. Besides the host-only provisioning key, `.env` may optionally carry an allowlisted set of LLM API keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `DEEPSEEK_API_KEY`, `ZAI_API_KEY`, `MOONSHOT_API_KEY`, `KIMI_API_KEY`, `MINIMAX_API_KEY`, `MISTRAL_API_KEY`, `XAI_API_KEY`) that FILL copies 0600 into each sandbox as `app/.env` for tools that read keys from the environment.
-- Confirm (never print) `OPENROUTER_PROVISIONING_KEY` is set and non-empty. Host-only, mints/revokes the per-run runtime keys. Get one at https://openrouter.ai/settings/keys.
-  - If empty: `warn` — required only to mount a sandbox; fine to leave blank for read-and-observe.
-- `OPENROUTER_API_KEY` (optional): only for running ADWs locally via `just local` / `just adw`. Inside a sandbox it is overwritten by a minted, capped runtime key.
+- If `.env` is missing, copy it: `cp .env.sample .env`, then tell the user which keys to fill. `.env` carries an allowlisted set of LLM API keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `DEEPSEEK_API_KEY`, `ZAI_API_KEY`, `ZAI_CODING_CN_API_KEY`, `MOONSHOT_API_KEY`, `KIMI_API_KEY`, `MINIMAX_API_KEY`, `MINIMAX_CN_API_KEY`, `MISTRAL_API_KEY`, `XAI_API_KEY`, `GROQ_API_KEY`, `CEREBRAS_API_KEY`, `FIREWORKS_API_KEY`, `TOGETHER_API_KEY`, `BASETEN_API_KEY`) that FILL copies 0600 into each sandbox as `app/.env`; pi's built-in providers read them from that environment. This is the sandbox's credential path.
+- **The active roster decides which keys are required.** FILL maps each `model: provider/id` in `adws/adw_sssf_config/*.yaml` to its env var and FAILS, naming the missing ones, before it ships anything. The default roster needs `DEEPSEEK_API_KEY`, `KIMI_API_KEY`, `ZAI_API_KEY`, and `MINIMAX_CN_API_KEY`.
+- `OPENROUTER_API_KEY` (optional): a pi built-in provider key — set it only if a roster you use names the `openrouter` provider.
 - `ANTHROPIC_API_KEY` (optional): Claude Code on its own key.
 
 ### Step 3 — Install Dependencies
@@ -69,7 +68,7 @@ Optional (only for a host-side orchestrator via `just local`; the VM image alrea
 
 - `.env` exists.
 - Rosters present: list `adws/adw_sssf_config/*.yaml` (expect five: default, deepestseek, frontier, open-weights, top-speed).
-- Model registry present: `sandbox_mount/guest/models.json.tmpl` exists and each model carries a full four-field `cost` block (a partial block drops the whole roster). `just sbx manage doctor` also asserts this.
+- Roster credentials present: every provider named in the active roster (`adws/adw_sssf_config/*.yaml`) has its env key set. `sandbox_mount/host/roster_keys.sh` holds the provider -> env-var map (pi's built-in providers), FILL fails fast naming any missing key, and `just sbx manage doctor` asserts it.
 - Skills present: `.claude/skills/sssf/SKILL.md` and `.claude/skills/sssf-sandbox-orchestrator/SKILL.md`.
 
 ### Step 5 — Verify Readiness (never start anything)
@@ -77,7 +76,7 @@ Optional (only for a host-side orchestrator via `just local`; the VM image alrea
 - Versions: `bun --version`, `uv --version`, `just --version`, `git --version`.
 - Namespaces resolve: `just --list inkwell adw sbx obs local` (each lists).
 - App suite green: `just inkwell test` (30 tests — this exits, it does not serve).
-- sbx preflight (only if `OPENROUTER_PROVISIONING_KEY` is set and `ssh exe.dev` is reachable): `just sbx manage doctor` — the six-check host preflight, ends with `sbx doctor: OK`. If the key is blank, mark this `skipped (mount-only)`, not failed.
+- sbx preflight (only if `ssh exe.dev` is reachable): `just sbx manage doctor` — the five-check host preflight, ends with `sbx doctor: OK`. If ssh is unavailable, mark this `skipped (mount-only)`, not failed.
 
 ### Step 6 — Report
 

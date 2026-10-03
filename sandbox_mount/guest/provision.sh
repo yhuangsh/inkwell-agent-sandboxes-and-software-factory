@@ -69,25 +69,33 @@ else
 fi
 command -v just >/dev/null 2>&1 || { echo "[provision] just not on PATH after install" >&2; exit 1; }
 
-# ── 4. pi model registry ─────────────────────────────────────────────────────
-# FILL ships ~/.pi/agent/models.json: the HOST pi agent's provider catalog plus
-# credentials, so the sandbox pi runs the same model set as the host. There is no
-# fallback — a sandbox without it cannot call any model — so provision hard-fails.
-#
-# `pi --list-models` prints "No models available" and EXITS 0 when the file is
-# missing — the most likely silent mount failure there is. The cost block is
-# all-or-nothing: a partial one fails schema validation and pi drops THE ENTIRE
-# ROSTER.
-step "4/9 pi models.json"
-mkdir -p "$HOME/.pi/agent"
-REGISTRY="$HOME/.pi/agent/models.json"
-if [[ -s "$REGISTRY" ]]; then
-  say "FILL shipped the host-mirrored registry — keeping it ($(grep -c '"id"' "$REGISTRY" || true) models)"
+# ── 4. pi agent (latest) ─────────────────────────────────────────────────────
+# No models.json, no mirrored registry: every roster provider is a pi BUILT-IN,
+# keyed by the env vars FILL ships into app/.env. What the sandbox needs from
+# this step is the binary itself, current — the exeuntu image may bake an old one.
+step "4/9 pi agent (latest)"
+command -v npm >/dev/null 2>&1 || { echo "[provision] npm missing — the exeuntu image must ship node/npm" >&2; exit 1; }
+PI_PKG="@earendil-works/pi-coding-agent"
+CUR="$(pi --version 2>/dev/null || echo none)"
+LATEST="$(npm view "$PI_PKG" version)"
+if [[ "$CUR" == "$LATEST" ]]; then
+  say "pi already at latest ($CUR)"
 else
-  echo "[provision] no FILL-shipped registry at $REGISTRY" >&2
-  echo "[provision] the sandbox pi has no model set — re-run: just sbx lifecycle fill <run-id>" >&2
-  exit 1
+  say "pi $CUR -> $LATEST"
+  npm install -g "$PI_PKG@latest" || sudo npm install -g "$PI_PKG@latest"
 fi
+# Global npm can land the binary in a prefix a fresh non-interactive `ssh vm cmd`
+# shell never reads — the same trap bun has in step 2. Symlink it where every
+# future session finds it.
+if ! command -v pi >/dev/null 2>&1; then
+  NPREFIX="$(npm prefix -g 2>/dev/null || true)"
+  if [[ -n "$NPREFIX" && -x "$NPREFIX/bin/pi" ]]; then
+    sudo ln -sf "$NPREFIX/bin/pi" /usr/local/bin/pi
+    say "linked $NPREFIX/bin/pi into /usr/local/bin for non-interactive ssh"
+  fi
+fi
+command -v pi >/dev/null 2>&1 || { echo "[provision] pi not on PATH after install" >&2; exit 1; }
+say "pi $(pi --version)"
 
 # ── 5. bun install ───────────────────────────────────────────────────────────
 step "5/9 bun install"
@@ -166,9 +174,17 @@ say "just    $(just --version)"
 say "uv      $(uv --version)"
 say "pi      $(pi --version 2>/dev/null || echo 'not installed')"
 say "python  $(python3 --version)"
-# `|| true` inside the pipeline, not after it: pipefail would otherwise hand the
+# Keys live in app/.env (FILL-shipped); source it in a subshell for an honest
+# count without leaving the vars exported, and never fail the run on it —
+# `pi --list-models` prints "No models available" and exits 0 with no creds.
+# `|| true` inside the pipeline, not after it: pipefail would otherwise hand a
 # failure of an absent/unhappy pi to the ERR trap and skip the sentinel below.
-say "models  $( { pi --list-models 2>/dev/null || true; } | grep -c . || true ) lines from pi --list-models"
+MODEL_LINES=$(
+  cd "$REPO_ROOT"
+  if [[ -f .env ]]; then set -a; . ./.env; set +a; fi
+  { pi --list-models 2>/dev/null || true; } | grep -c . || true
+)
+say "models  ${MODEL_LINES} lines from pi --list-models (credentials from app/.env)"
 echo ""
 echo "[provision] READY"
 

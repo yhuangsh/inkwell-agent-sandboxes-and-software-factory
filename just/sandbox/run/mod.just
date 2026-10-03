@@ -56,12 +56,12 @@ agent RUN_ID PROMPT:
     PROMPT={{ quote(PROMPT) }}
     Q=$(printf '%q' "$PROMPT")
 
-    # pi, not Claude Code. The sandbox pi carries the host-mirrored model set
-    # (shipped by FILL), so a bare `pi -p` uses the shipped default provider and
-    # model. --session-id CREATES the session if missing and CONTINUES it if it
-    # exists, so ONE invocation works for every turn: the old first-turn vs
-    # subsequent-turn sentinel (`--session-id` vs `--resume`) is gone entirely.
-    # Synchronous by design: the whole point is to read the reply and send the
-    # next turn.
+    # pi, not Claude Code. There is no mirrored host model set: pi's built-in
+    # catalog is keyed by app/.env (sourced below), and the FILL-shipped
+    # settings.json points a bare `pi -p` at the roster's default provider/model.
+    # --session-id CREATES the session if missing and CONTINUES it if it exists,
+    # so ONE invocation works for every turn: the old first-turn vs subsequent-turn
+    # sentinel (`--session-id` vs `--resume`) is gone entirely. Synchronous by
+    # design: the whole point is to read the reply and send the next turn.
     echo "→ run agent {{RUN_ID}} on $VM: pi session $SID"
-    ssh "$VM".exe.xyz "cd app && pi -p --session-id $SID $Q"
+    ssh "$VM".exe.xyz "cd app && if [ -f .env ]; then set -a; . ./.env; set +a; fi; pi -p --session-id $SID $Q"

@@ -69,11 +69,10 @@ host/run_record.py    the ONLY state shared across the six phases (each is a sep
                       which commits to harvest.
 host/runs_table.py    renders `just sbx manage list`. A file, not embedded, because an unindented
                       line inside a just recipe body TERMINATES the recipe.
-host/pi_mirror.py     mirrors the host pi agent's catalog + credentials into a sandbox; each
-                      model needs a FOUR-field cost block — a partial block fails schema
-                      validation and pi drops the entire roster.
+host/roster_keys.sh   maps each roster provider to the env var pi's built-in provider
+                      reads; FILL fails fast on a missing key and `doctor` asserts it.
 guest/provision.sh    runs INSIDE the VM: installs bun + just from CDNs
-                      (never apt), keeps the FILL-shipped pi registry, builds the UI,
+                      (never apt), installs/upgrades the pi agent to latest, builds the UI,
                       inits the trace db, touches the sentinel last.
 ```
 

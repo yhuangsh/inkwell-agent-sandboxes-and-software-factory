@@ -5,8 +5,8 @@
 # before or after the lifecycle does its work.
 #
 # A module inherits nothing, so the settings are repeated here with one more `..`
-# than the parent. dotenv-load matters in this one: `doctor` reads the host's pi
-# registry through the same mirror FILL uses.
+# than the parent. dotenv-load matters in this one: `doctor` checks that every
+# roster provider's key is set, reading the .env the same way FILL does.
 set working-directory := '../../..'
 set positional-arguments
 set dotenv-load
@@ -27,6 +27,6 @@ doctor:
     chk "ssh exe.dev reachable"            'ssh -o BatchMode=yes -o ConnectTimeout=15 exe.dev whoami'
     chk "run_record helper runs"           'sandbox_mount/host/run_record.py list'
     chk "provisioner present"              '[ -x sandbox_mount/guest/provision.sh ]'
-    chk "host pi catalog readable"         'uv run --quiet sandbox_mount/host/pi_mirror.py models | python3 -c "import json,sys; d=json.load(sys.stdin); assert d.get(\"providers\")"'
+    chk "roster provider keys set"         'sandbox_mount/host/roster_keys.sh'
     chk "adw layer resolves"               'just --list adw'
     [ "$ok" -eq 0 ] && echo "  sbx doctor: OK" || { echo "  sbx doctor: FAILED"; exit 1; }

@@ -1,18 +1,17 @@
-# Phase 2 — FILL. Put the code, the host pi model set, and a per-sandbox config
-# inside the VM.
+# Phase 2 — FILL. Put the code, the roster, and the sandbox's credentials inside
+# the VM.
 #
 # Imported into the root justfile, so no `set` lines here and no local variables:
 # six phase files share one scope and a `repo :=` in each would collide.
 #
-# TWO shapes of secret cross the wire here. (1) The host's provider API keys,
-# mirrored into the sandbox's pi registry (models.json) so the sandbox's pi can
-# call the host's model set. (2) The allowlisted LLM key vars the engineer set in
-# the host .env, shipped as ENVIRONMENT VARIABLES into app/.env on the VM for
-# tools that read keys from the environment. The discipline is strict for both —
-# stdin only, 0600, never echoed. See the header of sandbox_mount/host/pi_mirror.py
-# for the registry boundary rationale.
+# ONE shape of secret crosses the wire here: the allowlisted LLM key vars the
+# engineer set in the host .env, shipped as ENVIRONMENT VARIABLES into app/.env on
+# the VM. There is no host pi state to mirror: every provider the rosters name is
+# a pi BUILT-IN, keyed by those env vars, and pi's built-in catalog carries each
+# provider's baseUrl/api/cost. The discipline is strict — stdin only, 0600, never
+# echoed.
 
-# clone the factory into the VM, optionally pin a sha, mirror the host pi registry: just sbx lifecycle fill <run-id> [sha]
+# clone the factory into the VM, optionally pin a sha, ship the roster + credentials: just sbx lifecycle fill <run-id> [sha]
 fill RUN_ID *SHA:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -134,70 +133,77 @@ fill RUN_ID *SHA:
     # checked out, never the one that was asked for.
     "$RR" set {{RUN_ID}} commit_sha="$HEAD_SHA"
 
-    # ── ship the host pi model set + a per-sandbox config ────────────────────
-    # Goal 2: the sandbox's pi must expose the SAME model set as the host's pi.
-    # pi_mirror.py reads the host's own ~/.pi/agent state and emits documents on
-    # stdout; they are piped straight over ssh, so a document holding keys never
-    # lands in a temp file here (printf|cat, never argv).
+    # ── ship the roster + a derived settings.json ────────────────────────────
+    # No host pi state is mirrored any more: every provider the rosters name is a
+    # pi BUILT-IN, keyed by an env var. The sandbox pi learns its model set from
+    # the roster it is handed and its credentials from app/.env (shipped below);
+    # pi's built-in catalog carries baseUrl/api/cost.
     #
-    # BOUNDARY CHANGE (deliberate): the host's provider API keys now cross to the
-    # sandbox, in ~/.pi/agent/models.json. Without them the sandbox cannot call
-    # the host's direct providers (deepseek/zai/kimi-coding/minimax-cn), which is
-    # the whole point. They are written 0600 and never echoed back. pi reports its
-    # own per-run cost — setup gate D proves the rate table loaded.
-    MIRROR="sandbox_mount/host/pi_mirror.py"
-    [ -f "$MIRROR" ] || { echo "fill: missing $MIRROR" >&2; exit 1; }
-
     # The base roster is the ACTIVE one. The root justfile's `config` variable is
     # NOT visible here (this phase file is imported into the `sbx::lifecycle`
     # module, and modules inherit no variables), so read the same env var the
     # root's env_var_or_default reads, with the same fallback.
     ROSTER="${SSSF_CONFIG:-adws/adw_sssf_config/sssf.config.yaml}"
 
-    ssh "$HOST" 'mkdir -p "$HOME/.pi/agent"'
+    # FAIL FAST: every roster provider needs its key present in the host env
+    # (dotenv-load already put .env vars there). roster_keys.sh owns the
+    # provider -> env-var map; without this check a keyless provider would only
+    # surface as a call-time failure inside the sandbox.
+    sandbox_mount/host/roster_keys.sh "$ROSTER"
 
-    # models.json carries live provider keys. FAIL the whole fill if the generator
-    # cannot read the host catalog: goal 2 would be silently unmet and the sandbox
-    # pi would have no working model set.
-    if ! uv run --quiet "$MIRROR" models \
-         | ssh "$HOST" 'umask 077 && cat > "$HOME/.pi/agent/models.json" && chmod 600 "$HOME/.pi/agent/models.json"'; then
-        echo "fill: pi_mirror.py models failed — the host pi agent has no readable catalog" >&2
-        echo "      (~/.pi/agent/models-store.json and/or auth.json missing); goal 2 cannot" >&2
-        echo "      be met, and the sandbox pi would have no working model set." >&2
-        exit 1
-    fi
+    # Ship the roster VERBATIM: no model rewriting, no host-catalog validation —
+    # the setup gate validates against the sandbox's own pi. Fixed ABSOLUTE path,
+    # never $HOME: execute/setup build remote command strings through two quoting
+    # hops where $HOME expansion is fragile. observe.just already establishes the
+    # exeuntu user is `exedev`. Holds no secrets -> 0644.
+    cat "$ROSTER" | ssh "$HOST" 'cat > /home/exedev/sssf_config.yaml && chmod 644 /home/exedev/sssf_config.yaml'
 
-    uv run --quiet "$MIRROR" settings \
-        | ssh "$HOST" 'umask 077 && cat > "$HOME/.pi/agent/settings.json" && chmod 600 "$HOME/.pi/agent/settings.json"'
+    # A derived settings.json so a bare `pi -p` (the `run agent` lane) lands on
+    # the roster's default provider/model/thinking. Parse the same `defaults`
+    # block setup gate D reads.
+    DEFAULT_MODEL=$(awk '
+      /^defaults:[[:space:]]*$/ { d=1; next }
+      /^[^[:space:]]/          { d=0 }
+      d && /^[[:space:]]+model:[[:space:]]/ { print $2; exit }
+    ' "$ROSTER")
+    DEFAULT_THINKING=$(awk '
+      /^defaults:[[:space:]]*$/ { d=1; next }
+      /^[^[:space:]]/          { d=0 }
+      d && /^[[:space:]]+thinking:[[:space:]]/ { print $2; exit }
+    ' "$ROSTER")
+    DP="${DEFAULT_MODEL%%/*}"; DM="${DEFAULT_MODEL#*/}"
+    printf '{\n  "defaultProvider": "%s",\n  "defaultModel": "%s",\n  "defaultThinkingLevel": "%s"\n}\n' \
+        "$DP" "$DM" "${DEFAULT_THINKING:-medium}" \
+        | ssh "$HOST" 'mkdir -p "$HOME/.pi/agent" && umask 077 && cat > "$HOME/.pi/agent/settings.json" && chmod 600 "$HOME/.pi/agent/settings.json"'
 
-    # Fixed ABSOLUTE path, never $HOME: execute/setup build remote command strings
-    # through two quoting hops where $HOME expansion is fragile. observe.just already
-    # establishes the exeuntu user is `exedev`. Holds no secrets -> 0644.
-    uv run --quiet "$MIRROR" config --base "$ROSTER" \
-        | ssh "$HOST" 'cat > /home/exedev/sssf_config.yaml && chmod 644 /home/exedev/sssf_config.yaml'
+    # Remove stale mirror artifacts so a re-fill of a VM that once got the old
+    # mirror converges: an old models.json would shadow pi's built-in catalog
+    # with stale keys. auth.json is left alone if present (pi tolerates it;
+    # nothing we ship writes it).
+    ssh "$HOST" 'rm -f "$HOME/.pi/agent/models.json" "$HOME/.pi/agent/models-store.json"'
 
     # Prove each landed (mode/size) without printing any content. Single-quoted
     # remote paths so $HOME expands on the VM, not here.
-    MI_STAT=$(ssh "$HOST" 'stat -c "%a %s" "$HOME/.pi/agent/models.json"')
     SE_STAT=$(ssh "$HOST" 'stat -c "%a %s" "$HOME/.pi/agent/settings.json"')
     CF_STAT=$(ssh "$HOST" 'stat -c "%a %s" /home/exedev/sssf_config.yaml')
-    echo "==> fill: ~/.pi/agent/models.json (mode/size: $MI_STAT) — host provider keys crossed (0600)"
     echo "==> fill: ~/.pi/agent/settings.json (mode/size: $SE_STAT)"
-    echo "==> fill: /home/exedev/sssf_config.yaml (mode/size: $CF_STAT) — every agent's model pre-filled"
+    echo "==> fill: /home/exedev/sssf_config.yaml (mode/size: $CF_STAT) — shipped verbatim"
 
-    # ── ship .env-declared LLM API keys (optional) ─────────────────────────
+    # ── ship .env-declared LLM API keys (THE credential path) ──────────────
     # Keys the engineer set in the host .env cross as ENVIRONMENT VARIABLES into
-    # app/.env on the VM (0600, stdin only, never echoed). The pi registry
-    # mirror above stays the primary credential path; these serve anything that
-    # reads keys from the environment — `just adw` (dotenv-load), the ADW python
-    # (utils.load_dotenv -> operator_env), Claude Code (ANTHROPIC_API_KEY), SDKs.
+    # app/.env on the VM (0600, stdin only, never echoed). This is now THE
+    # credential path for the sandbox pi: its built-in providers read these env
+    # vars, and every remote pi invocation (setup gates, `run agent`, `just adw`
+    # via dotenv-load) sources app/.env first. Also serves anything else that
+    # reads keys from the environment (the ADW python, SDKs).
     # ALLOWLISTED on purpose: host-only overrides (PI_MODELS_PATH, SSSF_CONFIG,
     # ENGINEER_NAME, PI_PATH) must never leak into the box.
     LLM_KEY_VARS=(
         ANTHROPIC_API_KEY OPENAI_API_KEY OPENROUTER_API_KEY
         GEMINI_API_KEY GOOGLE_API_KEY DEEPSEEK_API_KEY ZAI_API_KEY
-        MOONSHOT_API_KEY KIMI_API_KEY MINIMAX_API_KEY MISTRAL_API_KEY
-        XAI_API_KEY
+        ZAI_CODING_CN_API_KEY MOONSHOT_API_KEY KIMI_API_KEY MINIMAX_API_KEY
+        MINIMAX_CN_API_KEY MISTRAL_API_KEY XAI_API_KEY GROQ_API_KEY
+        CEREBRAS_API_KEY FIREWORKS_API_KEY TOGETHER_API_KEY BASETEN_API_KEY
     )
     ENV_CONTENT=""
     SHIPPED=()
@@ -215,5 +221,5 @@ fill RUN_ID *SHA:
         # NAMES only — a proof line that prints a value defeats the 0600.
         echo "==> fill: app/.env (mode/size: $ENV_STAT) — env keys: ${SHIPPED[*]}"
     else
-        echo "==> fill: no LLM key vars set in .env — skipping app/.env (pi mirror is the credential path)"
+        echo "==> fill: no LLM key vars set in .env — skipping app/.env (nothing to ship)"
     fi

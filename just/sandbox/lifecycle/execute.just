@@ -7,7 +7,7 @@
 # Three ways to drive a mounted sandbox:
 #   just sbx run cmd            — generic escape hatch, synchronous, prints output
 #   just sbx lifecycle execute  — the default: full SDLC, DETACHED, returns a PID
-#   just sbx run agent          — hand off to Claude Code and keep talking to it
+#   just sbx run agent          — hand off to pi and keep talking to it
 #
 # Nothing here ever destroys a VM. A failure reports and exits non-zero with the
 # box left alive, because the evidence you need to diagnose it is on that box.
@@ -30,7 +30,9 @@
 # argparse; argparse keeps the LAST --config, so this wins over the module
 # default without the module needing to know about us. SSSF_CONFIG (the env
 # route) cannot work here at all: `ssh vm "cmd"` reads no profile and carries no
-# environment.
+# environment. When omitted it defaults to the per-sandbox config FILL ships at
+# /home/exedev/sssf_config.yaml — and a MISSING file is a hard failure, not a
+# silent fall back to the repo default.
 
 # ADW picks WHICH workflow runs — any recipe name from `just adw` (sdlc,
 # simple-sdlc, plan-build-test-quality, scout, …). It defaults to `sdlc`, so
@@ -58,15 +60,21 @@ execute RUN_ID PROMPT CONFIG="" ADW="sdlc" *EXTRA:
     PROMPT={{ quote(PROMPT) }}
     Q=$(printf '%q' "$PROMPT")
 
-    # Same two-hop treatment for the roster path, and the whole flag collapses to
-    # the empty string when no config was asked for — so the default call site
-    # builds the exact command it built before this argument existed.
+    # CONFIG picks the roster. When the caller does not pass one, use the
+    # per-sandbox config FILL ships at a fixed absolute path. A missing file FAILS
+    # rather than silently falling back to the repo default — that drift is exactly
+    # what this change removes. An explicit CONFIG still wins (fan-out with a
+    # pinned roster keeps working).
     CONFIG={{ quote(CONFIG) }}
-    CFG_ARG=""
-    if [ -n "$CONFIG" ]; then
-        CFG_ARG=" --config $(printf '%q' "$CONFIG")"
-        echo "→ roster: $CONFIG"
+    if [ -z "$CONFIG" ]; then
+        CONFIG="/home/exedev/sssf_config.yaml"
     fi
+    if ! ssh "$VM".exe.xyz "test -f $(printf '%q' "$CONFIG")" < /dev/null; then
+        echo "execute {{RUN_ID}}: roster $CONFIG is missing on $VM — run 'just sbx lifecycle fill {{RUN_ID}}' first" >&2
+        exit 1
+    fi
+    CFG_ARG=" --config $(printf '%q' "$CONFIG")"
+    echo "→ roster: $CONFIG"
 
     # All three detachment pieces are mandatory or ssh never returns: nohup
     # (survive session end), the redirect (release stdout/stderr), < /dev/null

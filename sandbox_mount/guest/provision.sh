@@ -70,35 +70,47 @@ fi
 command -v just >/dev/null 2>&1 || { echo "[provision] just not on PATH after install" >&2; exit 1; }
 
 # ── 4. pi model registry ─────────────────────────────────────────────────────
-# ~/.pi/agent/models.json does not exist on a fresh VM, and without it
-# `pi --list-models` prints "No models available" and EXITS 0 — the most likely
-# silent mount failure there is. The cost block is all-or-nothing: a partial one
-# fails schema validation and pi drops THE ENTIRE ROSTER.
+# FILL ships ~/.pi/agent/models.json: the HOST pi agent's provider catalog plus
+# credentials, so the sandbox pi runs the same model set as the host. Provision
+# only when FILL did not ship one, and then it is the OpenRouter-only template
+# fallback — say so loudly, because the sandbox is then NOT on the host's set.
+#
+# `pi --list-models` prints "No models available" and EXITS 0 when the file is
+# missing — the most likely silent mount failure there is. The cost block is
+# all-or-nothing: a partial one fails schema validation and pi drops THE ENTIRE
+# ROSTER.
 step "4/9 pi models.json"
-TMPL="sandbox_mount/guest/models.json.tmpl"
-[[ -f "$TMPL" ]] || { echo "[provision] missing ${TMPL}" >&2; exit 1; }
 mkdir -p "$HOME/.pi/agent"
-
-models_json="$(cat "$TMPL")"
-# The template ships apiKey "env:OPENROUTER_API_KEY". pi only sees that variable
-# when its parent exported it — true for ADWs (uv run + dotenv), not true for a
-# bare `ssh <vm> 'pi --list-models'`, which is exactly what the health gate runs.
-# So bake the runtime key in when .env has one.
-api_key=""
-if [[ -f .env ]]; then
-  api_key="$(grep -E '^[[:space:]]*(export[[:space:]]+)?OPENROUTER_API_KEY=' .env \
-             | tail -n 1 | sed -E 's/^[^=]*=//; s/^["'"'"']//; s/["'"'"']$//' || true)"
-fi
-if [[ -n "$api_key" ]]; then
-  models_json="${models_json//env:OPENROUTER_API_KEY/$api_key}"   # bash substitution, never argv
-  say "runtime key baked in from .env"
+REGISTRY="$HOME/.pi/agent/models.json"
+if [[ -s "$REGISTRY" ]]; then
+  say "FILL shipped the host-mirrored registry — keeping it ($(grep -c '"id"' "$REGISTRY" || true) models)"
 else
-  say "no OPENROUTER_API_KEY in .env — leaving the env: placeholder (pi will need it exported)"
+  say "WARNING: no FILL-shipped registry — falling back to the OpenRouter-only template set"
+  say "         the sandbox is NOT on the host's model set; re-run FILL to fix that"
+  TMPL="sandbox_mount/guest/models.json.tmpl"
+  [[ -f "$TMPL" ]] || { echo "[provision] missing ${TMPL}" >&2; exit 1; }
+
+  models_json="$(cat "$TMPL")"
+  # The template ships apiKey "env:OPENROUTER_API_KEY". pi only sees that variable
+  # when its parent exported it — true for ADWs (uv run + dotenv), not true for a
+  # bare `ssh <vm> 'pi --list-models'`, which is exactly what the health gate runs.
+  # So bake the runtime key in when .env has one.
+  api_key=""
+  if [[ -f .env ]]; then
+    api_key="$(grep -E '^[[:space:]]*(export[[:space:]]+)?OPENROUTER_API_KEY=' .env \
+               | tail -n 1 | sed -E 's/^[^=]*=//; s/^["'"'"']//; s/["'"'"']$//' || true)"
+  fi
+  if [[ -n "$api_key" ]]; then
+    models_json="${models_json//env:OPENROUTER_API_KEY/$api_key}"   # bash substitution, never argv
+    say "runtime key baked in from .env"
+  else
+    say "no OPENROUTER_API_KEY in .env — leaving the env: placeholder (pi will need it exported)"
+  fi
+  printf '%s\n' "$models_json" > "$REGISTRY"
+  chmod 600 "$REGISTRY"                                            # it holds a live key
+  unset models_json api_key
+  say "wrote $REGISTRY ($(grep -c '"id"' "$REGISTRY" || true) models)"
 fi
-printf '%s\n' "$models_json" > "$HOME/.pi/agent/models.json"
-chmod 600 "$HOME/.pi/agent/models.json"                            # it holds a live key
-unset models_json api_key
-say "wrote $HOME/.pi/agent/models.json ($(grep -c '"id"' "$HOME/.pi/agent/models.json" || true) models)"
 
 # ── 5. bun install ───────────────────────────────────────────────────────────
 step "5/9 bun install"
@@ -169,46 +181,13 @@ else
   exit 1
 fi
 
-# ── 8b. pre-answer Claude Code's interactive onboarding ──────────────────────
-# `claude -p` (the `just sbx run agent` lane) skips onboarding, so nothing here
-# exercised it until someone attached INTERACTIVELY with `claude --resume`.
-# Interactive first run blocks on three gates in a row: theme picker, then
-# "Detected a custom API key in your environment — use it?", then login method.
-#
-# The middle gate is the load-bearing one and its default is NO. Answering no is
-# unrecoverable on a headless VM: ANTHROPIC_API_KEY=implicit plus
-# ANTHROPIC_BASE_URL=llm.int.exe.xyz IS the key-free exe.dev gateway, so
-# declining it falls through to a login prompt that can never complete here.
-# The approval is keyed by the literal token "implicit" — the same string the
-# env var carries.
-#
-# Idempotent: it rewrites three keys and preserves everything else in the file.
-step "8b/9 claude onboarding"
-if command -v claude >/dev/null 2>&1; then
-  python3 - <<'PY'
-import json, os
-p = os.path.expanduser("~/.claude.json")
-d = json.load(open(p)) if os.path.exists(p) else {}
-d["hasCompletedOnboarding"] = True
-d["theme"] = "dark"
-r = d.setdefault("customApiKeyResponses", {})
-r["approved"] = sorted(set(r.get("approved", [])) | {"implicit"})
-r["rejected"] = [x for x in r.get("rejected", []) if x != "implicit"]
-json.dump(d, open(p, "w"))
-PY
-  say "onboarding pre-answered (theme, implicit key approved)"
-else
-  say "claude not installed — skipping"
-fi
-
-# ── summary ──────────────────────────────────────────────────────────────────
+# ── summary ────────────────────────────────────────────────────────────────
 step "9/9 summary"
 say "repo    $REPO_ROOT @ $(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 say "bun     $(bun --version)"
 say "just    $(just --version)"
 say "uv      $(uv --version)"
 say "pi      $(pi --version 2>/dev/null || echo 'not installed')"
-say "claude  $(claude --version 2>/dev/null || echo 'not installed')"
 say "python  $(python3 --version)"
 # `|| true` inside the pipeline, not after it: pipefail would otherwise hand the
 # failure of an absent/unhappy pi to the ERR trap and skip the sentinel below.

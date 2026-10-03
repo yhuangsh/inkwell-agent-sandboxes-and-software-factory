@@ -19,8 +19,8 @@
 # disconnected history. Free integrity check on the return trip.
 #
 # NOT A SEVENTH PHASE. It writes nothing to the run record — the bundle's existence
-# at .sandbox/runs/<id>.bundle IS the record, the same reasoning that makes
-# `.agent-started` a sentinel file rather than a field. The schema stays closed.
+# at .sandbox/runs/<id>.bundle IS the record, keeping state out of the closed
+# run-record schema rather than adding a field to it. The schema stays closed.
 #
 # IDEMPOTENT: re-running overwrites the bundle and force-updates the ref. It only
 # ever writes refs under refs/sandbox/ — never your working tree, index, or any

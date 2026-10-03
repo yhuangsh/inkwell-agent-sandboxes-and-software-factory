@@ -34,8 +34,8 @@ pi:
 
 # To steer the agent already running INSIDE a mounted sandbox, use the run layer
 # instead:  just sbx run agent RUN_ID "<prompt>"  (see just/sandbox/run/mod.just).
-# It is host-side like everything here, but it drives Claude Code on the VM over
-# a resumable --session-id. There was briefly a `steer` alias for it; two names
+# It is host-side like everything here, but it drives pi on the VM over a
+# resumable --session-id. There was briefly a `steer` alias for it; two names
 # for one behavior, split across two files, is worse than one.
 #
 # There was also an `orchestrate-with "<task>"` that booted the orchestrator with

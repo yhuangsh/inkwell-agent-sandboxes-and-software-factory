@@ -1,10 +1,15 @@
-# Phase 2 — FILL. Put the code and the runtime key inside the VM.
+# Phase 2 — FILL. Put the code, the runtime key, the host pi model set, and a
+# per-sandbox config inside the VM.
 #
 # Imported into the root justfile, so no `set` lines here and no local variables:
 # six phase files share one scope and a `repo :=` in each would collide.
 #
-# OPENROUTER_PROVISIONING_KEY is never read in this file, by design. The only key
-# that crosses the wire is the disposable runtime key minted in CREATE.
+# OPENROUTER_PROVISIONING_KEY is never read in this file, by design. TWO kinds of
+# secret DO cross the wire here, under the same discipline (stdin only, 0600):
+# the disposable OpenRouter runtime key minted in CREATE (fallback path), and —
+# new in this phase — the host's provider API keys, mirrored into the sandbox's
+# pi registry so the sandbox's pi can call the host's model set. See the header
+# of sandbox_mount/host/pi_mirror.py for the boundary-change rationale.
 
 # clone the factory into the VM, optionally pin a sha, write .env: just sbx lifecycle fill <run-id> [sha]
 fill RUN_ID *SHA:
@@ -153,3 +158,56 @@ fill RUN_ID *SHA:
     # Prove it landed without ever printing it back. exeuntu is Ubuntu, so GNU stat.
     ENV_STAT=$(ssh "$HOST" 'stat -c "%a %s" app/.env')
     echo "==> fill: app/.env written (mode/size: $ENV_STAT) — provisioning key never left the host"
+
+    # ── ship the host pi model set + a per-sandbox config ────────────────────
+    # Goal 2: the sandbox's pi must expose the SAME model set as the host's pi.
+    # pi_mirror.py reads the host's own ~/.pi/agent state and emits documents on
+    # stdout; they are piped straight over ssh, so a document holding keys never
+    # lands in a temp file here (printf|cat, never argv).
+    #
+    # BOUNDARY CHANGE (deliberate): the host's provider API keys now cross to the
+    # sandbox, in ~/.pi/agent/models.json. Without them the sandbox cannot call
+    # the host's direct providers (deepseek/zai/kimi-coding/minimax-cn), which is
+    # the whole point. They are written 0600 like app/.env and never echoed back.
+    # CONSEQUENCE: spend on direct providers no longer flows through the OpenRouter
+    # runtime key, so teardown's recorded `spend` reads $0 on these runs. pi still
+    # reports its own per-run cost — setup gate D proves the rate table loaded.
+    MIRROR="sandbox_mount/host/pi_mirror.py"
+    [ -f "$MIRROR" ] || { echo "fill: missing $MIRROR" >&2; exit 1; }
+
+    # The base roster is the ACTIVE one. The root justfile's `config` variable is
+    # NOT visible here (this phase file is imported into the `sbx::lifecycle`
+    # module, and modules inherit no variables), so read the same env var the
+    # root's env_var_or_default reads, with the same fallback.
+    ROSTER="${SSSF_CONFIG:-adws/adw_sssf_config/sssf.config.yaml}"
+
+    ssh "$HOST" 'mkdir -p "$HOME/.pi/agent"'
+
+    # models.json carries live provider keys. FAIL the whole fill if the generator
+    # cannot read the host catalog: goal 2 would be silently unmet and provision.sh
+    # would fall back to the OpenRouter-only template set.
+    if ! uv run --quiet "$MIRROR" models \
+         | ssh "$HOST" 'umask 077 && cat > "$HOME/.pi/agent/models.json" && chmod 600 "$HOME/.pi/agent/models.json"'; then
+        echo "fill: pi_mirror.py models failed — the host pi agent has no readable catalog" >&2
+        echo "      (~/.pi/agent/models-store.json and/or auth.json missing); goal 2 cannot" >&2
+        echo "      be met, and filling anyway would silently fall back to the OpenRouter set." >&2
+        exit 1
+    fi
+
+    uv run --quiet "$MIRROR" settings \
+        | ssh "$HOST" 'umask 077 && cat > "$HOME/.pi/agent/settings.json" && chmod 600 "$HOME/.pi/agent/settings.json"'
+
+    # Fixed ABSOLUTE path, never $HOME: execute/setup build remote command strings
+    # through two quoting hops where $HOME expansion is fragile. observe.just already
+    # establishes the exeuntu user is `exedev`. Holds no secrets -> 0644.
+    uv run --quiet "$MIRROR" config --base "$ROSTER" \
+        | ssh "$HOST" 'cat > /home/exedev/sssf_config.yaml && chmod 644 /home/exedev/sssf_config.yaml'
+
+    # Prove each landed (mode/size) without printing any content. Single-quoted
+    # remote paths so $HOME expands on the VM, not here.
+    MI_STAT=$(ssh "$HOST" 'stat -c "%a %s" "$HOME/.pi/agent/models.json"')
+    SE_STAT=$(ssh "$HOST" 'stat -c "%a %s" "$HOME/.pi/agent/settings.json"')
+    CF_STAT=$(ssh "$HOST" 'stat -c "%a %s" /home/exedev/sssf_config.yaml')
+    echo "==> fill: ~/.pi/agent/models.json (mode/size: $MI_STAT) — host provider keys crossed (0600)"
+    echo "==> fill: ~/.pi/agent/settings.json (mode/size: $SE_STAT)"
+    echo "==> fill: /home/exedev/sssf_config.yaml (mode/size: $CF_STAT) — every agent's model pre-filled"

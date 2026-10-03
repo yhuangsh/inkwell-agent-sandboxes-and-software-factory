@@ -188,8 +188,9 @@ create RUN_ID *FLAGS:
     echo "ssh:     up after $((SECONDS - WAIT_START))s"
 
     # ── 6. session id ──────────────────────────────────────────────────────────
-    # `claude --session-id` demands a UUID and `--resume` needs the same one on
-    # every later turn, so it is minted once, here, and lives in the record.
+    # pi's `--session-id` CREATES the session if missing and CONTINUES it when it
+    # exists, so one id drives every turn of the `just sbx run agent` lane. It is
+    # minted once, here, and lives in the record.
     SESSION_ID="$(python3 -c 'import uuid; print(uuid.uuid4())')"
     "$RR" set "$RUN_ID" session_id="$SESSION_ID"
     echo "session: $SESSION_ID"

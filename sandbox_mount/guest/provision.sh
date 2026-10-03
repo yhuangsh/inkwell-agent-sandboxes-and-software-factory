@@ -72,30 +72,65 @@ command -v just >/dev/null 2>&1 || { echo "[provision] just not on PATH after in
 # ── 4. pi agent (latest) ─────────────────────────────────────────────────────
 # No models.json, no mirrored registry: every roster provider is a pi BUILT-IN,
 # keyed by the env vars FILL ships into app/.env. What the sandbox needs from
-# this step is the binary itself, current — the exeuntu image may bake an old one.
+# this step is the binary itself, current — the exeuntu image bakes an OLD native
+# pi and ships NO node/npm (and that baked binary refuses to self-update: `pi
+# update` bails at /$bunfs/root/pi). So bootstrap a standalone Node from
+# nodejs.org — never apt — then install the npm `latest` through the normal
+# npm-global path. Node/npm are symlinked into /usr/local/bin because the
+# npm-installed pi is a `#!/usr/bin/env node` script, and every future
+# `ssh vm cmd` is a fresh non-interactive shell that reads no rc file.
 step "4/9 pi agent (latest)"
-command -v npm >/dev/null 2>&1 || { echo "[provision] npm missing — the exeuntu image must ship node/npm" >&2; exit 1; }
+NODE_DIR="$HOME/.local/node"
+if [[ -x "$NODE_DIR/bin/node" ]]; then
+  export PATH="$NODE_DIR/bin:$PATH"   # re-run fast path: node already bootstrapped
+fi
+if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
+  NODE_VER="$(curl -fsSL https://nodejs.org/dist/latest-v22.x/ \
+    | sed -n 's/.*node-v\([0-9.]*\)-linux-x64\.tar\.xz.*/\1/p' | sort -u | tail -n 1)"
+  [[ -n "$NODE_VER" ]] || { echo "[provision] could not resolve a Node 22 release from nodejs.org" >&2; exit 1; }
+  say "bootstrapping standalone Node v${NODE_VER} into ${NODE_DIR} (no apt)"
+  mkdir -p "$NODE_DIR"
+  curl -fsSL "https://nodejs.org/dist/latest-v22.x/node-v${NODE_VER}-linux-x64.tar.xz" \
+    | tar -xJ --strip-components=1 -C "$NODE_DIR"
+  export PATH="$NODE_DIR/bin:$PATH"
+fi
+for b in node npm npx; do
+  [[ -x "$NODE_DIR/bin/$b" ]] || continue
+  sudo ln -sf "$NODE_DIR/bin/$b" "/usr/local/bin/$b"
+done
+command -v npm >/dev/null 2>&1 || { echo "[provision] npm missing after Node bootstrap" >&2; exit 1; }
 PI_PKG="@earendil-works/pi-coding-agent"
-CUR="$(pi --version 2>/dev/null || echo none)"
+# Resolve the `latest` dist-tag ONCE and install that exact version below: a
+# second `@latest` resolution could land a version the compare above rejected.
 LATEST="$(npm view "$PI_PKG" version)"
+CUR="$(pi --version 2>/dev/null || echo none)"
 if [[ "$CUR" == "$LATEST" ]]; then
   say "pi already at latest ($CUR)"
 else
   say "pi $CUR -> $LATEST"
-  npm install -g "$PI_PKG@latest" || sudo npm install -g "$PI_PKG@latest"
+  npm install -g "$PI_PKG@$LATEST" || sudo npm install -g "$PI_PKG@$LATEST"
 fi
-# Global npm can land the binary in a prefix a fresh non-interactive `ssh vm cmd`
-# shell never reads — the same trap bun has in step 2. Symlink it where every
-# future session finds it.
-if ! command -v pi >/dev/null 2>&1; then
-  NPREFIX="$(npm prefix -g 2>/dev/null || true)"
-  if [[ -n "$NPREFIX" && -x "$NPREFIX/bin/pi" ]]; then
-    sudo ln -sf "$NPREFIX/bin/pi" /usr/local/bin/pi
-    say "linked $NPREFIX/bin/pi into /usr/local/bin for non-interactive ssh"
-  fi
+# Global npm installs into its own prefix and the image bakes a native pi at
+# /usr/local/bin/pi. Relink that path at the fresh npm-global binary ON EVERY
+# run: /usr/local/bin precedes /usr/bin and the npm prefixes in every
+# non-interactive ssh shell, so a stale baked pi can never shadow the install.
+# Unconditional (not "only when command -v pi differs") because this shell has
+# $NODE_DIR/bin prepended and would otherwise see the right binary while future
+# ssh shells still see the baked one.
+NPREFIX="$(npm prefix -g 2>/dev/null || true)"
+if [[ -n "$NPREFIX" && -x "$NPREFIX/bin/pi" ]]; then
+  sudo ln -sf "$NPREFIX/bin/pi" /usr/local/bin/pi
+  hash -r
+  say "linked $NPREFIX/bin/pi -> /usr/local/bin/pi for non-interactive ssh"
 fi
 command -v pi >/dev/null 2>&1 || { echo "[provision] pi not on PATH after install" >&2; exit 1; }
-say "pi $(pi --version)"
+# Hard assertion, not a passive report: a shadowed binary or a registry outage
+# must FAIL the mount. Plain exit 1 so the sentinel below is never touched.
+[[ "$(pi --version 2>/dev/null)" == "$LATEST" ]] || {
+  echo "[provision] pi is at $(pi --version 2>/dev/null || echo missing), registry latest is $LATEST" >&2
+  exit 1
+}
+say "pi $(pi --version) (registry latest)"
 
 # ── 5. bun install ───────────────────────────────────────────────────────────
 step "5/9 bun install"

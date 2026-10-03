@@ -133,11 +133,13 @@ setup RUN_ID CONFIG="":
       gate_fail "assertion A — git integrity"
     fi
 
-    # B — pi has models. `pi --list-models` EXITS 0 while printing
-    # "No models available", so never trust $?: assert on the output, and
-    # reject that exact string, which is otherwise one non-empty line and would
-    # sail through a naive non-empty check.
-    echo "[gate] B pi --list-models is non-empty"
+    # B — pi is current and has models. `pi --list-models` EXITS 0 while
+    # printing "No models available", so never trust $?: assert on the output,
+    # and reject that exact string, which is otherwise one non-empty line and
+    # would sail through a naive non-empty check. Version parity is checked here
+    # too: a stale, image-baked pi would otherwise pass every other assertion
+    # while the mount's done-condition (pi == registry latest) is false.
+    echo "[gate] B pi is current and --list-models is non-empty"
     if "${SSH[@]}" 'bash -s' <<'REMOTE_B'; then
     set -uo pipefail
     # Keys live in app/.env; `ssh host cmd` carries no environment, so a fresh
@@ -146,6 +148,12 @@ setup RUN_ID CONFIG="":
     # `command -v` first: without it a missing pi prints one line of
     # "command not found" and a bare non-empty check calls that a pass.
     command -v pi >/dev/null 2>&1 || { echo "   pi is not on PATH"; exit 1; }
+    # Version parity with the registry: provision step 4 must have landed the
+    # latest. No host expansion here (quoted heredoc), so npm resolves remotely.
+    want="$(npm view @earendil-works/pi-coding-agent version)" || { echo "   npm view failed — cannot verify pi currency"; exit 1; }
+    got="$(pi --version 2>/dev/null || true)"
+    [ "$got" = "$want" ] || { echo "   pi is $got, registry latest is $want — provision step 4 did not land latest"; exit 1; }
+    echo "   pi $got matches registry latest"
     out="$(pi --list-models 2>&1 || true)"
     n="$(printf '%s\n' "$out" | grep -c . || true)"
     if [ "${n:-0}" -eq 0 ]; then
@@ -156,9 +164,9 @@ setup RUN_ID CONFIG="":
     fi
     echo "   ${n} lines from pi --list-models"
     REMOTE_B
-      echo "[gate] B PASS  pi built-in providers loaded from app/.env"
+      echo "[gate] B PASS  pi current and built-in providers loaded from app/.env"
     else
-      gate_fail "assertion B — pi --list-models empty or 'No models available'"
+      gate_fail "assertion B — pi stale, missing, or --list-models empty or 'No models available'"
     fi
 
     # C, D, E run as ONE script inside the sandbox. C pings each roster model

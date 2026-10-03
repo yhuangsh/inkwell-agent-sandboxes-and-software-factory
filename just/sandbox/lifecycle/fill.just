@@ -1,17 +1,15 @@
-# Phase 2 — FILL. Put the code, the runtime key, the host pi model set, and a
-# per-sandbox config inside the VM.
+# Phase 2 — FILL. Put the code, the host pi model set, and a per-sandbox config
+# inside the VM.
 #
 # Imported into the root justfile, so no `set` lines here and no local variables:
 # six phase files share one scope and a `repo :=` in each would collide.
 #
-# OPENROUTER_PROVISIONING_KEY is never read in this file, by design. TWO kinds of
-# secret DO cross the wire here, under the same discipline (stdin only, 0600):
-# the disposable OpenRouter runtime key minted in CREATE (fallback path), and —
-# new in this phase — the host's provider API keys, mirrored into the sandbox's
-# pi registry so the sandbox's pi can call the host's model set. See the header
-# of sandbox_mount/host/pi_mirror.py for the boundary-change rationale.
+# ONE kind of secret crosses the wire here: the host's provider API keys, mirrored
+# into the sandbox's pi registry so the sandbox's pi can call the host's model set.
+# The discipline is strict — stdin only, 0600, never echoed. See the header of
+# sandbox_mount/host/pi_mirror.py for the boundary rationale.
 
-# clone the factory into the VM, optionally pin a sha, write .env: just sbx lifecycle fill <run-id> [sha]
+# clone the factory into the VM, optionally pin a sha, mirror the host pi registry: just sbx lifecycle fill <run-id> [sha]
 fill RUN_ID *SHA:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -133,32 +131,6 @@ fill RUN_ID *SHA:
     # checked out, never the one that was asked for.
     "$RR" set {{RUN_ID}} commit_sha="$HEAD_SHA"
 
-    # .env lands here, not at CREATE: it lives inside app/, which does not exist
-    # until the clone does. `new --env` is useless for it anyway — that lands in
-    # /etc/profile.d and is invisible to `ssh vm "cmd"`.
-    KEY_FILE=".sandbox/runs/{{RUN_ID}}.key"
-    if [ ! -s "$KEY_FILE" ]; then
-        echo "fill: no runtime key at $KEY_FILE — CREATE must mint it before FILL" >&2
-        exit 1
-    fi
-    RUNTIME_KEY=$(tr -d '\r\n' < "$KEY_FILE")
-    # Unverified which shape CREATE writes; tolerate both the bare key and KEY=value.
-    RUNTIME_KEY="${RUNTIME_KEY#OPENROUTER_API_KEY=}"
-    if [ -z "$RUNTIME_KEY" ]; then
-        echo "fill: runtime key file $KEY_FILE is empty" >&2
-        exit 1
-    fi
-
-    # printf is a builtin and cat reads stdin: the key never appears in argv on
-    # either side, so it never shows up in ps. umask before the redirect so the
-    # file is never briefly world-readable.
-    printf 'OPENROUTER_API_KEY=%s\n' "$RUNTIME_KEY" \
-        | ssh "$HOST" 'umask 077 && cat > app/.env && chmod 600 app/.env'
-
-    # Prove it landed without ever printing it back. exeuntu is Ubuntu, so GNU stat.
-    ENV_STAT=$(ssh "$HOST" 'stat -c "%a %s" app/.env')
-    echo "==> fill: app/.env written (mode/size: $ENV_STAT) — provisioning key never left the host"
-
     # ── ship the host pi model set + a per-sandbox config ────────────────────
     # Goal 2: the sandbox's pi must expose the SAME model set as the host's pi.
     # pi_mirror.py reads the host's own ~/.pi/agent state and emits documents on
@@ -168,10 +140,8 @@ fill RUN_ID *SHA:
     # BOUNDARY CHANGE (deliberate): the host's provider API keys now cross to the
     # sandbox, in ~/.pi/agent/models.json. Without them the sandbox cannot call
     # the host's direct providers (deepseek/zai/kimi-coding/minimax-cn), which is
-    # the whole point. They are written 0600 like app/.env and never echoed back.
-    # CONSEQUENCE: spend on direct providers no longer flows through the OpenRouter
-    # runtime key, so teardown's recorded `spend` reads $0 on these runs. pi still
-    # reports its own per-run cost — setup gate D proves the rate table loaded.
+    # the whole point. They are written 0600 and never echoed back. pi reports its
+    # own per-run cost — setup gate D proves the rate table loaded.
     MIRROR="sandbox_mount/host/pi_mirror.py"
     [ -f "$MIRROR" ] || { echo "fill: missing $MIRROR" >&2; exit 1; }
 
@@ -184,13 +154,13 @@ fill RUN_ID *SHA:
     ssh "$HOST" 'mkdir -p "$HOME/.pi/agent"'
 
     # models.json carries live provider keys. FAIL the whole fill if the generator
-    # cannot read the host catalog: goal 2 would be silently unmet and provision.sh
-    # would fall back to the OpenRouter-only template set.
+    # cannot read the host catalog: goal 2 would be silently unmet and the sandbox
+    # pi would have no working model set.
     if ! uv run --quiet "$MIRROR" models \
          | ssh "$HOST" 'umask 077 && cat > "$HOME/.pi/agent/models.json" && chmod 600 "$HOME/.pi/agent/models.json"'; then
         echo "fill: pi_mirror.py models failed — the host pi agent has no readable catalog" >&2
         echo "      (~/.pi/agent/models-store.json and/or auth.json missing); goal 2 cannot" >&2
-        echo "      be met, and filling anyway would silently fall back to the OpenRouter set." >&2
+        echo "      be met, and the sandbox pi would have no working model set." >&2
         exit 1
     fi
 

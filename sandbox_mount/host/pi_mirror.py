@@ -20,8 +20,8 @@ that holds secrets never lands in a temp file on either side.
 SECURITY: `models` embeds the host's provider API keys (read from
 ~/.pi/agent/auth.json). Those keys cross to a disposable sandbox DELIBERATELY —
 that is what lets the sandbox's pi call the host's real providers instead of the
-OpenRouter fallback set. Treat this program's `models` output as secret: pipe it,
-never print it back, never put it in argv.
+old OpenRouter fallback set. Treat this program's `models` output as secret: pipe
+it, never print it back, never put it in argv.
 
 Run it through uv (the PEP-723 header above has the pyyaml dependency):
 
@@ -50,9 +50,9 @@ SETTINGS_FILE = PI_AGENT / "settings.json"
 # active `{{config}}` explicitly, so this is only the manual-invocation default.
 DEFAULT_BASE = "adws/adw_sssf_config/sssf.config.yaml"
 
-# ONLY the fields the proven `sandbox_mount/guest/models.json.tmpl` schema uses.
-# pi's models.json is validated as a whole: an unknown/partial shape can make pi
-# drop the entire roster, so this list is deliberately conservative.
+# ONLY the fields pi's models.json schema uses. pi validates the file as a whole:
+# an unknown/partial shape can make pi drop the entire roster, so this list is
+# deliberately conservative.
 _MODEL_FIELDS = ("id", "name", "contextWindow", "maxTokens", "reasoning", "input")
 # ALL FOUR are required together — a partial cost block fails validation and pi
 # then drops EVERY model, not just the one with the bad rates.

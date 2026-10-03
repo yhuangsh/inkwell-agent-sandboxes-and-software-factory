@@ -19,8 +19,8 @@ The command surface mirrors that split: `just adw` (the workflows), `just sbx` (
 justfile              4 namespaces and nothing else: adw, sbx, local, obs.
 README.md             the three layers, the layout, and how to run each one.
 TREE.md               this file.
-.env.sample           OPENROUTER_PROVISIONING_KEY is HOST-ONLY; the runtime key is minted
-                      per sandbox. Never commit .env (gitignored).
+.env.sample           optional overrides only; inference credentials live in the host pi
+                      agent's registry. Never commit .env (gitignored).
 LICENSE               MIT.
 ```
 
@@ -36,25 +36,24 @@ just/local.just       the `local` namespace: cc / pi / ipi, an orchestrator agen
                       FUNCTION, not a binary.
 just/obs.just         the `obs` namespace: sessions, phases, tail, procs, kill, rosters, ui.
                       Meant to work inside a sandbox too — reading your own traces is wanted there.
-just/sandbox/         the `sbx` namespace. HOST-ONLY: needs the exe.dev account and the
-                      provisioning key, neither of which reaches a sandbox.
+just/sandbox/         the `sbx` namespace. HOST-ONLY: needs the exe.dev account, which
+                      reaches no sandbox.
   mod.just            module entry: settings + the four submodules + imports mount.just.
   mount.just          create -> fill -> setup -> observe. Never teardown.
   lifecycle/          the six phases. `just sbx lifecycle <phase> <run-id>`.
     mod.just          settings + imports the six phase files.
-    create.just       phase 1. Strict order: record -> VM -> key, so a crash always leaves
+    create.just       phase 1. Strict order: record -> VM, so a crash always leaves
                       teardown a handle.
     fill.just         phase 2. Public git clone (no auth), the `sbx/<run-id>` run branch, then
-                      write .env with the runtime key.
+                      the host pi registry + per-sandbox config over ssh.
     setup.just        phase 3. provision.sh, then the FIVE-assertion gate.
     execute.just      phase 4. Full SDLC inside the box, detached, returns a pid.
     observe.just      phase 5. Start both servers, expose 4501 publicly, print both URLs.
-    teardown.just     phase 6. Harvests first, then revoke -> destroy -> close.
+    teardown.just     phase 6. Harvests first, then destroy -> close.
   manage/             auxiliary: preflight, readback, fleet ops.
     mod.just          settings + imports + the `doctor` preflight.
-    list.just         every run: state, VM alive, spend.
+    list.just         every run: state, VM alive.
     harvest.just      bundle the run branch off the VM into refs/sandbox/<run-id>.
-    reap.just         revoke orphaned sbx- keys. Dry run by default.
   run/                put work in, or look inside.
     mod.just          `run cmd` (inspect, synchronous) and `run agent` (resumable Claude Code
                       session inside the box).
@@ -66,15 +65,16 @@ just/sandbox/         the `sbx` namespace. HOST-ONLY: needs the exe.dev account 
 
 ```
 host/run_record.py    the ONLY state shared across the six phases (each is a separate
-                      process). Without it teardown cannot know which key to revoke.
+                      process). Without it teardown cannot know which VM to destroy or
+                      which commits to harvest.
 host/runs_table.py    renders `just sbx manage list`. A file, not embedded, because an unindented
                       line inside a just recipe body TERMINATES the recipe.
+host/pi_mirror.py     mirrors the host pi agent's catalog + credentials into a sandbox; each
+                      model needs a FOUR-field cost block — a partial block fails schema
+                      validation and pi drops the entire roster.
 guest/provision.sh    runs INSIDE the VM: installs bun + just from CDNs
-                      (never apt), writes models.json, builds the UI, inits the trace db,
-                      touches the sentinel last.
-guest/models.json.tmpl  10 models, each with a FOUR-field cost block. A partial block fails
-                      schema validation and pi drops the entire roster; with no rates pi
-                      reports $0.0000 forever while genuinely spending.
+                      (never apt), keeps the FILL-shipped pi registry, builds the UI,
+                      inits the trace db, touches the sentinel last.
 ```
 
 ## `adws/` — the factory
@@ -87,8 +87,8 @@ adws/adw_modules/     agents.py (roster + validation), agent_pi.py / agent_cc.py
                       (deterministic checks incl. the test suite), tracer.py (the trace db),
                       session.py, runner.py, permissions.py, git_helper.py.
 adws/adw_sssf_config/ sssf.config.yaml (cheap roster) and sssf.frontier.config.yaml.
-                      Every model is `openrouter/<id>`; the first slash splits provider
-                      from model id.
+                      Every model is `provider/id`; the first slash splits provider from
+                      model id.
 adws/adw_data/        runtime: sessions/, prompt_engineering/, harness_engineering/, and
                       sssf.db. NEVER edit sessions/ — it is the run record.
 ```

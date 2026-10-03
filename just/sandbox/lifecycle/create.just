@@ -1,50 +1,27 @@
-# Phase 1 — CREATE. Host only: control plane + key mint. Nothing lands on the VM.
+# Phase 1 — CREATE. Host only: control plane. Nothing lands on the VM.
 #
 # This file is IMPORTED by the root justfile, so it shares the root's scope and
 # must not repeat `set dotenv-load` / `set positional-arguments` (duplicate
 # settings are a parse error). Relative paths resolve against the repo root
 # because an import — unlike a `mod` — keeps the root's working directory.
 #
-# Strict order, and the order is the whole design: record → VM → key.
+# Strict order, and the order is the whole design: record → VM → wait for ssh.
 #   record first  a crash anywhere after leaves teardown a handle to work from.
-#   VM before key a failed mint orphans a VM: cheap, and visible in
-#                 `ssh exe.dev ls`. A failed VM after a mint orphans a key that
-#                 spends money invisibly.
 # Nothing here ever destroys a VM. Failures stop and print the teardown command;
 # the box stays alive so it can be inspected.
 
-# mint a runtime key + boot a VM for one run: just sbx lifecycle create <task-or-run-id> [--limit 200]
-create RUN_ID *FLAGS:
+# boot a VM for one run: just sbx lifecycle create <task-or-run-id>
+create RUN_ID:
     #!/usr/bin/env bash
     set -euo pipefail
 
     RR="sandbox_mount/host/run_record.py"
-    LIMIT="50.00"   # dollars on the OpenRouter key; the only knob CREATE has
-
-    # $1 is RUN_ID, the variadic FLAGS follow (root sets positional-arguments).
-    shift || true
-    while [ $# -gt 0 ]; do
-        case "$1" in
-            --limit)   LIMIT="${2:-}"; shift 2 || true ;;
-            --limit=*) LIMIT="${1#*=}"; shift ;;
-            *) echo "create: unknown flag '$1' (supported: --limit N)" >&2; exit 2 ;;
-        esac
-    done
-    if ! [[ "$LIMIT" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
-        echo "create: --limit must be a number of dollars, got '$LIMIT'" >&2; exit 2
-    fi
 
     # Preflight before anything is created, so a missing dependency cannot leave
     # a half-built run behind.
-    for bin in ssh curl python3; do
+    for bin in ssh python3; do
         command -v "$bin" >/dev/null || { echo "create: '$bin' not on PATH" >&2; exit 1; }
     done
-    # HOST-ONLY secret, from .env via the root's dotenv-load. Existence is checked;
-    # the value is never printed, never written to a VM, never passed over ssh.
-    if [ -z "${OPENROUTER_PROVISIONING_KEY:-}" ]; then
-        echo "create: OPENROUTER_PROVISIONING_KEY missing from .env (host-only, mints/revokes runtime keys)" >&2
-        exit 1
-    fi
 
     # ── 1. run id ──────────────────────────────────────────────────────────────
     # The run id becomes the VM name and the VM name becomes a public hostname,
@@ -65,12 +42,9 @@ create RUN_ID *FLAGS:
     echo "record:  $RECORD"
 
     # From here on a failure leaves real resources. Never destroy anything —
-    # report, stop, and say how to clean up. BODY holds the mint response (which
-    # contains the secret key) so it is shredded on every exit path.
-    BODY=""
+    # report, stop, and say how to clean up.
     _on_exit() {
         rc=$?
-        if [ -n "$BODY" ]; then rm -f "$BODY"; fi
         if [ "$rc" -ne 0 ]; then
             printf '\ncreate FAILED (exit %s). Nothing was destroyed — inspect, then:\n  just sbx lifecycle teardown %s\n' "$rc" "$RUN_ID" >&2
         fi
@@ -80,7 +54,7 @@ create RUN_ID *FLAGS:
 
     # ── 3. the VM ──────────────────────────────────────────────────────────────
     # Control plane is plain ssh; --json makes it scriptable. --tag inkwell is
-    # what `reap` and bulk cleanup filter on.
+    # what bulk cleanup filters on.
     echo "vm:      creating $RUN_ID (ssh exe.dev new --tag inkwell) ..."
     VM_JSON="$(ssh exe.dev new --name "$RUN_ID" --tag inkwell --json)"
 
@@ -124,51 +98,7 @@ create RUN_ID *FLAGS:
     "$RR" set "$RUN_ID" vm_name="$VM_NAME" https_url="$HTTPS_URL"
     echo "vm:      $VM_NAME  ->  $HTTPS_URL"
 
-    # ── 4. the runtime key (LAST — see the header for why) ─────────────────────
-    # The 'sbx-' prefix is load-bearing: it is how `reap` tells managed keys from
-    # the engineer's personal ones. Never mint without it.
-    KEY_FILE=".sandbox/runs/${RUN_ID}.key"
-    mkdir -p .sandbox/runs
-    BODY="$(mktemp)"   # 0600 by mktemp; holds the secret until it is on disk
-    CODE="$(curl -sS -o "$BODY" -w '%{http_code}' https://openrouter.ai/api/v1/keys \
-        -H "Authorization: Bearer $OPENROUTER_PROVISIONING_KEY" \
-        -H "Content-Type: application/json" \
-        -d "$(printf '{"name": "sbx-%s", "limit": %s}' "$RUN_ID" "$LIMIT")")"
-    if [ "$CODE" != "200" ] && [ "$CODE" != "201" ]; then
-        # Safe to show: a failed mint returned no key. A success is never printed.
-        echo "create: OpenRouter key mint failed (HTTP $CODE): $(cat "$BODY")" >&2
-        rm -f "$BODY"; exit 1
-    fi
-
-    # python writes the secret straight to disk at 0600 and prints only the hash,
-    # so the key never reaches stdout, a log, or a shell variable. It also stays
-    # out of the JSON record, which is greppable and gets shown in reports.
-    KEY_HASH="$(python3 - "$BODY" "$KEY_FILE" <<'PY'
-    import json, os, sys
-
-    try:
-        d = json.load(open(sys.argv[1]))
-    except ValueError:
-        sys.exit("create: OpenRouter mint response was not JSON")
-    data = d.get("data") if isinstance(d.get("data"), dict) else {}
-    # Observed shape is key at top level, hash under .data — accept either place.
-    key = d.get("key") or data.get("key")
-    key_hash = d.get("hash") or data.get("hash")
-    if not key or not key_hash:
-        sys.exit("create: mint response missing key/hash (top-level fields: %s)" % ", ".join(sorted(d)))
-    fd = os.open(sys.argv[2], os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as fh:
-        fh.write(key + "\n")
-    print(key_hash)
-    PY
-    )"
-    rm -f "$BODY"
-    chmod 600 "$KEY_FILE"
-    "$RR" set "$RUN_ID" key_hash="$KEY_HASH" limit="$LIMIT"
-    echo "key:     sbx-$RUN_ID  limit \$$LIMIT  hash $KEY_HASH"
-    echo "key:     secret written to $KEY_FILE (0600) — FILL injects it"
-
-    # ── 5. wait for ssh ────────────────────────────────────────────────────────
+    # ── 4. wait for ssh ────────────────────────────────────────────────────────
     # All *.exe.xyz share one host key and the wildcard known_hosts entry is
     # already installed, so BatchMode never stalls on a prompt.
     echo "ssh:     waiting for $VM_NAME.exe.xyz (up to 60s) ..."
@@ -187,7 +117,7 @@ create RUN_ID *FLAGS:
     fi
     echo "ssh:     up after $((SECONDS - WAIT_START))s"
 
-    # ── 6. session id ──────────────────────────────────────────────────────────
+    # ── 5. session id ──────────────────────────────────────────────────────────
     # pi's `--session-id` CREATES the session if missing and CONTINUES it when it
     # exists, so one id drives every turn of the `just sbx run agent` lane. It is
     # minted once, here, and lives in the record.
@@ -196,5 +126,5 @@ create RUN_ID *FLAGS:
     echo "session: $SESSION_ID"
 
     echo
-    echo "created  $RUN_ID  (no code and no secrets on the box yet)"
+    echo "created  $RUN_ID  (no code on the box yet)"
     echo "next     just sbx lifecycle fill $RUN_ID"

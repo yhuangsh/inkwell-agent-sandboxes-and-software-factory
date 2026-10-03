@@ -7,8 +7,7 @@
 # setting is a hard error), and the root's variable scope is shared.
 #
 # HOST-ONLY in practice: this phase touches the exe.dev control plane, which a
-# sandbox has no credential for. It needs NO
-# secrets at all — no OpenRouter key of either kind is read or forwarded here.
+# sandbox has no credential for. It needs NO secrets at all.
 #
 # NEVER destroys the VM. Every failure below reports and exits non-zero with the
 # box still up, because the evidence you need lives on it. `just sbx lifecycle teardown` stays

@@ -9,10 +9,10 @@
 # destroys a VM. On failure it prints how to get into the box and exits
 # non-zero, because a gate that auto-destroys throws away the evidence.
 #
-# The OpenRouter PROVISIONING key never appears in this file, and the gate no
-# longer reads the RUNTIME key either: C/D/E exercise the sandbox's own pi and
-# its mirrored registry, none of which needs OpenRouter. They still run INSIDE
-# the sandbox so the gate proves the sandbox's own egress works, not the host's.
+# The gate reads no host secret: C/D/E exercise the sandbox's own pi and its
+# mirrored registry (shipped by FILL), which is the only credential path. They
+# still run INSIDE the sandbox so the gate proves the sandbox's own egress works,
+# not the host's.
 
 # CONFIG picks which roster the gate checks. It has to be an ARGUMENT: C used to
 # read $SSSF_CONFIG out of the remote environment, but `ssh host 'cmd'` carries
@@ -159,9 +159,8 @@ setup RUN_ID CONFIG="":
 
     # C, D, E run as ONE script inside the sandbox. C pings each roster model
     # THROUGH the sandbox's own pi, D asks pi for a real cost, and E checks the
-    # registry's credentials. The OpenRouter runtime key is NOT read here anymore:
-    # the gate now exercises the sandbox's pi/egress directly. That key still backs
-    # the template fallback path (provision.sh / fill.just), written 0600 there.
+    # registry's credentials. The gate exercises the sandbox's pi/egress directly;
+    # the only credentials it touches are the host-mirrored ones in models.json.
     echo "[gate] C roster ping   D non-zero cost   E credential coverage"
     if "${SSH[@]}" 'bash -s' {{ quote(CONFIG) }} <<'REMOTE_CDE'; then
     set -uo pipefail
@@ -176,9 +175,8 @@ setup RUN_ID CONFIG="":
     [ -f "$CFG" ] || { echo "   missing ${CFG} — run FILL first"; exit 1; }
 
     # Every `model:` line is `provider/id`, and the provider half is a pi PROVIDER
-    # name (deepseek, zai, kimi-coding, minimax-cn, zai-coding-cn). No stripping:
-    # unlike the old `openrouter/<vendor>/<model>` form, both halves are exactly
-    # what pi --provider/--model want.
+    # name (deepseek, zai, kimi-coding, minimax-cn, zai-coding-cn). Both halves are
+    # exactly what pi --provider/--model want, so nothing is stripped.
     MODELS="$(awk '/^[[:space:]]*model:[[:space:]]/ {print $2}' "$CFG" | sort -u)"
     [ -n "$MODELS" ] || { echo "   parsed zero models out of ${CFG}"; exit 1; }
 
@@ -186,13 +184,13 @@ setup RUN_ID CONFIG="":
     # pi resolves the provider block, reads its apiKey, picks the api flavor
     # (openai-completions AND anthropic-messages both appear in the host catalog),
     # and hits the baseUrl — so ONE call verifies credential + baseUrl + api
-    # flavor + registry entry, which an OpenRouter curl never could for a direct
-    # provider.
+    # flavor + registry entry, which a single provider curl never could for a
+    # direct provider.
     ping_fail=0
     for m in $MODELS; do
       provider="${m%%/*}"; model="${m#*/}"
       resp="$(timeout 180 pi -p --no-tools --provider "$provider" --model "$model" \
-                'ping - respond with pong' 2>/dev/null || true)"
+                'ping - respond with pong' < /dev/null 2>/dev/null || true)"
       if [ -n "$(printf '%s' "$resp" | tr -d '[:space:]')" ]; then
         echo "   pass  ${m}"
       else
@@ -208,7 +206,7 @@ setup RUN_ID CONFIG="":
     # fine and reports $0.0000 forever while genuinely spending. Observed: a
     # 463.6k-token run logged $0.0000.
     #
-    # Ask pi directly rather than asking OpenRouter (a key-usage diff rounds to $0
+    # Ask pi directly rather than diffing provider key usage (that rounds to $0
     # on a one-sentence call and would false-fail). The live call runs on the
     # roster's defaults.model — the model every agent inherits at minimum.
     DEFAULT_MODEL="$(awk '
@@ -223,7 +221,7 @@ setup RUN_ID CONFIG="":
     # recipe, and multi-line python cannot survive that. jq ships in the image.
     pi_cost="$(timeout 180 pi -p --mode json \
                  --provider "$d_provider" --model "$d_model" \
-                 'Write one sentence about sandboxes.' 2>/dev/null \
+                 'Write one sentence about sandboxes.' < /dev/null 2>/dev/null \
                | jq -s '[.. | objects | select(has("cost")) | .cost.total // 0] | max // 0' \
                || echo 0)"
     if awk -v c="$pi_cost" 'BEGIN { exit !(c > 0) }'; then
@@ -262,10 +260,10 @@ setup RUN_ID CONFIG="":
     done
 
     # ── E: every roster provider has a credential ────────────────────────────
-    # Spend no longer flows through the OpenRouter runtime key, so the old
-    # limit-minus-usage reading said nothing. What matters now is that every
-    # provider the roster calls carries a usable apiKey in the sandbox's registry
-    # — a keyless (or still-`env:`) provider fails at call time.
+    # Spend is no longer read from a provider key, so an old limit-minus-usage
+    # reading said nothing. What matters now is that every provider the roster
+    # calls carries a usable apiKey in the sandbox's registry — a keyless (or
+    # still-`env:`) provider fails at call time.
     cred_fail=0
     PROVIDERS="$(printf '%s\n' "$MODELS" | sed 's|/.*||' | sort -u)"
     for p in $PROVIDERS; do

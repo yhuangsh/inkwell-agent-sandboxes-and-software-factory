@@ -4,10 +4,10 @@
 # the phase files share one scope and a duplicate name across them is a hard error.
 #
 # WHY A BUNDLE AND NOT A PUSH. The sandbox is filled by a public, unauthenticated
-# `git clone`. It holds one disposable OpenRouter runtime key and no git credential
-# of any kind — no PAT, no deploy key, no ssh identity. That is deliberate: the box
-# runs an autonomous agent under --dangerously-skip-permissions, and a push
-# credential would give that agent write access to the repo it was cloned from.
+# `git clone` and holds no git credential of any kind — no PAT, no deploy key, no
+# ssh identity. That is deliberate: the box runs an autonomous agent under
+# --dangerously-skip-permissions, and a push credential would give that agent
+# write access to the repo it was cloned from.
 # A bundle moves commits across that gap with no credential at all, and the work
 # lands in refs you inspect before anything touches a branch of yours.
 #

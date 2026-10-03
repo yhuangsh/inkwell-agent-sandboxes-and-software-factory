@@ -42,9 +42,9 @@ Once oriented, you operate the whole system by talking to the agent. Two skills 
 ### Manual Install
 
 ```bash
-cp .env.sample .env                  # add OPENROUTER_PROVISIONING_KEY (host-only, never leaves)
+cp .env.sample .env                  # optional overrides only; inference creds live in the host pi registry
 cd apps/inkwell && bun install       # app deps
-just sbx manage doctor               # six-check preflight: ssh, key, helpers, rates, adw layer
+just sbx manage doctor               # five-check preflight: ssh, helpers, provisioner, pi catalog, adw layer
 just inkwell test                    # 30 tests green = the payload works
 ```
 
@@ -59,10 +59,9 @@ Every resource this system leans on, what it does, and whether you actually need
 | [`uv`](https://docs.astral.sh/uv/) | runs the PEP-723 Python ADW scripts | required | not needed |
 | [`just`](https://just.systems) | the whole command surface (all four namespaces) | required | helpful (to read the recipes) |
 | [exe.dev account](https://exe.dev) | the disposable VMs the factory runs inside | required to mount | not needed |
-| [OpenRouter provisioning key](https://openrouter.ai/settings/keys) | mints and revokes the per-run inference keys | required to mount | not needed |
 | [Claude Code](https://claude.com/claude-code) + [Pi](https://github.com/badlogic/pi-mono) | the coding agents that do the work | preinstalled on the VM | not needed |
 
-Two credentials are the entire reason the sandbox is safe: the **exe.dev account** and the **OpenRouter provisioning key** live only on your host. Everything else is a fast, free toolchain install. If you only want to understand the design, clone the repo and read: no account, no key, nothing to spend.
+One credential is the entire reason the sandbox is safe: the **exe.dev account** lives only on your host, and the host pi agent's provider keys are mirrored into each sandbox by FILL. Everything else is a fast, free toolchain install. If you only want to understand the design, clone the repo and read: no account, nothing to spend.
 
 ---
 
@@ -145,7 +144,7 @@ Twelve ADWs (AI Developer Workflows) under `adws/`, each a thin `uv run` script 
   <img src="images/value/03_core_four.png" alt="An agent is four things: a model, a harness, tools, and a prompt, wired around a central agent node" width="750">
 </p>
 
-Under every phase is the same primitive: an agent is a model, a harness, tools, and a prompt. The factory holds those four constant and swaps only the prompt and the model per phase. Staffing is one config file, swappable per run: five rosters ship in `adws/adw_sssf_config/`, the cheap default, the frontier roster, pure DeepSeek, open-weights, and top-speed. Every model is `openrouter/<id>`, so the ids are identical on your laptop and inside every box.
+Under every phase is the same primitive: an agent is a model, a harness, tools, and a prompt. The factory holds those four constant and swaps only the prompt and the model per phase. Staffing is one config file, swappable per run: five rosters ship in `adws/adw_sssf_config/`, the cheap default, the frontier roster, pure DeepSeek, open-weights, and top-speed. Every model is `provider/id`, resolved against the host pi agent's registry, so the same ids work on your laptop and inside every box.
 
 The factory has its own standalone codebase at [disler/super-simple-software-factory](https://github.com/disler/super-simple-software-factory), the skill that stamps it into any repo. This repo just runs it.
 
@@ -158,10 +157,10 @@ The factory has its own standalone codebase at [disler/super-simple-software-fac
 Six phases take a blank exe.dev VM to a health-checked, running factory in about 10 measured seconds: create, fill, setup, execute, observe, teardown. Every phase is a `just` recipe a human could type; the run record on disk is the only state they share, so any crash leaves teardown a handle.
 
 <p align="center">
-  <img src="images/10_credential_boundary.png" alt="The credential boundary: the exe.dev account and provisioning key never leave the host; a per-run capped key crosses; a sandbox cannot mount sandboxes" width="750">
+  <img src="images/10_credential_boundary.png" alt="The credential boundary: the exe.dev account never leaves the host; the host pi provider registry is mirrored into each sandbox; a sandbox cannot mount sandboxes" width="750">
 </p>
 
-The whole repo ships to the VM. What a sandbox cannot do is *use* the orchestration half, because the exe.dev account and the OpenRouter provisioning key never leave the host. Each run gets a disposable `sbx-` key with a $50 cap, revoked at teardown. **One level of nesting, enforced by credentials rather than by deleting files.**
+The whole repo ships to the VM. What a sandbox cannot do is *use* the orchestration half, because the exe.dev account never leaves the host. Each sandbox instead gets a mirror of the host pi agent's provider registry, shipped by FILL. **One level of nesting, enforced by credentials rather than by deleting files.**
 
 <p align="center">
   <img src="images/17_best_of_n.png" alt="Best-of-N: one prompt fans out to three software factories and the results come back ranked" width="750">
@@ -181,7 +180,7 @@ The main flow, top to bottom. Every command is a `just` recipe you could type by
 
 ```bash
 # 0. one-time: credentials + preflight
-cp .env.sample .env               # add OPENROUTER_PROVISIONING_KEY (host-only)
+cp .env.sample .env               # optional overrides; inference creds live in the host pi registry
 just sbx manage doctor            # must end with: sbx doctor: OK
 
 # 1. mount a throwaway VM into a running factory (~10s)
@@ -192,7 +191,7 @@ just sbx lifecycle execute <run-id> "add a word-count badge to the editor footer
 just sbx run agent       <run-id> "READ and EXECUTE .claude/skills/sssf/SKILL.md. Then: <work>"  # delegated
 
 # 3. watch from outside
-just sbx manage list              # every run: state, VM alive, spend
+just sbx manage list              # every run: state, VM alive
 just obs sessions                 # the ADW runs inside your boxes
 just obs tail <adw_id>            # live event stream for one run
 
@@ -235,7 +234,7 @@ Each sandbox exposes two ports: the app is public, the agent view stays auth-gat
 just obs ui                 # boot the observability UI
 just obs sessions           # recent runs
 just obs tail <adw_id>      # live event tail
-just sbx manage list        # every sandbox: state, VM alive, spend
+just sbx manage list        # every sandbox: state, VM alive
 ```
 
 ---

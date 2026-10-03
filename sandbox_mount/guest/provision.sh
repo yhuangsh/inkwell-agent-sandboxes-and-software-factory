@@ -71,9 +71,8 @@ command -v just >/dev/null 2>&1 || { echo "[provision] just not on PATH after in
 
 # ── 4. pi model registry ─────────────────────────────────────────────────────
 # FILL ships ~/.pi/agent/models.json: the HOST pi agent's provider catalog plus
-# credentials, so the sandbox pi runs the same model set as the host. Provision
-# only when FILL did not ship one, and then it is the OpenRouter-only template
-# fallback — say so loudly, because the sandbox is then NOT on the host's set.
+# credentials, so the sandbox pi runs the same model set as the host. There is no
+# fallback — a sandbox without it cannot call any model — so provision hard-fails.
 #
 # `pi --list-models` prints "No models available" and EXITS 0 when the file is
 # missing — the most likely silent mount failure there is. The cost block is
@@ -85,31 +84,9 @@ REGISTRY="$HOME/.pi/agent/models.json"
 if [[ -s "$REGISTRY" ]]; then
   say "FILL shipped the host-mirrored registry — keeping it ($(grep -c '"id"' "$REGISTRY" || true) models)"
 else
-  say "WARNING: no FILL-shipped registry — falling back to the OpenRouter-only template set"
-  say "         the sandbox is NOT on the host's model set; re-run FILL to fix that"
-  TMPL="sandbox_mount/guest/models.json.tmpl"
-  [[ -f "$TMPL" ]] || { echo "[provision] missing ${TMPL}" >&2; exit 1; }
-
-  models_json="$(cat "$TMPL")"
-  # The template ships apiKey "env:OPENROUTER_API_KEY". pi only sees that variable
-  # when its parent exported it — true for ADWs (uv run + dotenv), not true for a
-  # bare `ssh <vm> 'pi --list-models'`, which is exactly what the health gate runs.
-  # So bake the runtime key in when .env has one.
-  api_key=""
-  if [[ -f .env ]]; then
-    api_key="$(grep -E '^[[:space:]]*(export[[:space:]]+)?OPENROUTER_API_KEY=' .env \
-               | tail -n 1 | sed -E 's/^[^=]*=//; s/^["'"'"']//; s/["'"'"']$//' || true)"
-  fi
-  if [[ -n "$api_key" ]]; then
-    models_json="${models_json//env:OPENROUTER_API_KEY/$api_key}"   # bash substitution, never argv
-    say "runtime key baked in from .env"
-  else
-    say "no OPENROUTER_API_KEY in .env — leaving the env: placeholder (pi will need it exported)"
-  fi
-  printf '%s\n' "$models_json" > "$REGISTRY"
-  chmod 600 "$REGISTRY"                                            # it holds a live key
-  unset models_json api_key
-  say "wrote $REGISTRY ($(grep -c '"id"' "$REGISTRY" || true) models)"
+  echo "[provision] no FILL-shipped registry at $REGISTRY" >&2
+  echo "[provision] the sandbox pi has no model set — re-run: just sbx lifecycle fill <run-id>" >&2
+  exit 1
 fi
 
 # ── 5. bun install ───────────────────────────────────────────────────────────

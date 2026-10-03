@@ -3,9 +3,9 @@
 
 Lives in a file rather than embedded in the recipe for two reasons. An
 unindented line inside a just recipe body TERMINATES the recipe, so embedded
-python is a parse error waiting to happen. And the record has legitimately-empty
-fields — `spend` is null until teardown — which a tab-delimited shell read-loop
-mis-assigns, landing the vm name in the SPEND column.
+python is a parse error waiting to happen. And a tab-delimited shell read-loop
+over records with optional fields mis-assigns columns; one python pass renders
+the table with no field shifting.
 
 Reads run records from stdin as JSON; takes the live VM list as argv[1] (a
 comma-separated string, or the literal `__unknown__` when the control plane
@@ -31,7 +31,7 @@ def main() -> int:
         print("no runs yet — start one with: just mount <task-name>")
         return 0
 
-    print(f"{'RUN':<34} {'STATE':<8} {'VM':<7} {'SPEND':<10} CREATED")
+    print(f"{'RUN':<34} {'STATE':<8} {'VM':<7} CREATED")
     for rec in records:
         vm = rec.get("vm_name") or ""
         state = "closed" if rec.get("closed_at") else "open"
@@ -41,10 +41,8 @@ def main() -> int:
             vm_state = "up"
         else:
             vm_state = "gone"
-        spend = rec.get("spend")
-        spend_s = f"${spend}" if spend is not None else "-"
         created = (rec.get("created_at") or "").split("T")[0]
-        print(f"{rec.get('run_id', '?'):<34} {state:<8} {vm_state:<7} {spend_s:<10} {created}")
+        print(f"{rec.get('run_id', '?'):<34} {state:<8} {vm_state:<7} {created}")
     return 0
 
 

@@ -27,8 +27,8 @@ config := env_var_or_default("SSSF_CONFIG", "adws/adw_sssf_config/sssf.config.ya
 #   `mod sbx`            — OUT-of-sandbox orchestration. Creates, fills, and
 #                          observes the VMs the ADWs run inside. It ships to the
 #                          sandbox like everything else; what a sandbox cannot do
-#                          is USE it, because the exe.dev account and the
-#                          OpenRouter provisioning key never leave the host.
+#                          is USE it, because the exe.dev account never leaves the
+#                          host.
 # A module namespaces its recipes and inherits nothing from this file — see the
 # header of just/adws.just for what that costs. An `import`, by contrast, shares
 # its parent module's scope and working directory, which is why the phase files

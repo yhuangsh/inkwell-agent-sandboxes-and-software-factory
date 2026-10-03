@@ -5,9 +5,8 @@
 #
 # This namespace ships to the sandbox like everything else. What stops a sandbox
 # from mounting sandboxes is not the absence of these recipes but the absence of
-# the CREDENTIALS they need: the exe.dev account and OPENROUTER_PROVISIONING_KEY
-# never leave the host. A box that runs `just sbx mount` gets an auth failure,
-# not a nested VM.
+# the CREDENTIAL they need: the exe.dev account never leaves the host. A box that
+# runs `just sbx mount` gets an auth failure, not a nested VM.
 #
 # A module inherits NOTHING from its parent — not variables, not settings, and
 # its working directory defaults to its own file's directory. Hence the three

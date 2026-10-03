@@ -3,9 +3,9 @@
 
 Each phase (create, fill, setup, execute, observe, teardown) is a separate
 process, so nothing survives between them except what is on disk. Teardown has
-no other way to learn which OpenRouter key to revoke: lose the record and the
-key is unrevokable and keeps burning credit. One JSON file per run, keyed by
-run_id, under .sandbox/runs/ (gitignored).
+no other way to learn which VM to destroy and which commits to harvest: lose the
+record and the run cannot be cleaned up. One JSON file per run, keyed by run_id,
+under .sandbox/runs/ (gitignored).
 
 Usage:
     run_record.py create  <run-id>
@@ -44,9 +44,6 @@ FIELDS = (
     "run_id",
     "vm_name",
     "https_url",
-    "key_hash",
-    "limit",
-    "spend",
     "session_id",
     "commit_sha",
     "ports",
@@ -61,9 +58,7 @@ IMMUTABLE = ("run_id", "created_at")
 
 # CLI values arrive as strings. Per-field coercion instead of "try JSON first",
 # because a commit_sha of 5734129 is a string that happens to parse as a number.
-# `spend` is what the key actually cost, read back from OpenRouter at teardown.
-# It is what makes best-of-N comparable: same prompt, N models, cost beside result.
-_COERCE = {"ports": "json", "pid": "int", "limit": "float", "spend": "float"}
+_COERCE = {"ports": "json", "pid": "int"}
 
 
 def _now() -> str:
@@ -97,8 +92,8 @@ def create(run_id: str) -> dict:
     RUNS_DIR.mkdir(parents=True, exist_ok=True)
     target = path(run_id)
     # O_EXCL, not `if target.exists()`: overwriting a live record orphans that
-    # run's key, and the check-then-write window is exactly when a retrying
-    # phase would land.
+    # run's teardown handle, and the check-then-write window is exactly when a
+    # retrying phase would land.
     try:
         fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     except FileExistsError:
@@ -148,10 +143,10 @@ def _apply(run_id: str, fields: dict) -> dict:
 
 
 def close(run_id: str) -> dict:
-    """Mark the run torn down. Non-null closed_at means the key is revoked.
+    """Mark the run torn down. Non-null closed_at means teardown finished.
 
     Idempotent, and the first close wins: teardown is retryable and the moment
-    that matters is when the key actually died.
+    that matters is when the run actually died.
     """
     record = get(run_id)
     if record.get("closed_at") is None:
@@ -169,9 +164,8 @@ def list_runs() -> list[dict]:
         try:
             records.append(json.loads(f.read_text()))
         except (OSError, ValueError) as e:
-            # Loud, not skipped. `reap` walks this list to find keys nobody
-            # revoked; a record quietly dropped for being malformed is a key
-            # that quietly keeps spending.
+            # Loud, not skipped. A record quietly dropped for being malformed
+            # hides a run's VM from teardown.
             raise ValueError(f"unreadable run record {f}: {e}") from None
     records.sort(key=lambda r: (r.get("created_at") or "", r.get("run_id") or ""), reverse=True)
     return records

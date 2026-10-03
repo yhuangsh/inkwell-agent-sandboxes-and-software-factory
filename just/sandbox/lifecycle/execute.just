@@ -13,9 +13,9 @@
 # box left alive, because the evidence you need to diagnose it is on that box.
 # Teardown is always a separate, explicit decision.
 #
-# OPENROUTER_PROVISIONING_KEY is never read in this file and must never be. Only
-# the mint/revoke phases touch it, and it never leaves the host. We also never
-# ask ssh to forward host env (no SendEnv), so nothing from .env leaks over.
+# No sandbox-minted credentials exist: the only host-only credential is the
+# exe.dev account, and it never leaves the host. We also never ask ssh to forward
+# host env (no SendEnv), so nothing from .env leaks over.
 
 # usage: just sbx lifecycle execute <run-id> "add a word-count badge to the editor footer"
 #        just sbx lifecycle execute <run-id> prompts/06-redesign-quiet-room.md adws/adw_sssf_config/sssf.frontier.config.yaml

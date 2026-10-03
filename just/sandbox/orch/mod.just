@@ -11,8 +11,7 @@
 #                          .claude/skills/sssf-sandbox-orchestrator/SKILL.md and
 #                          drives the phases: mount, execute, observe, harvest,
 #                          tear down. Belongs on the HOST: it needs the exe.dev
-#                          account and the provisioning key, neither of which
-#                          ever reaches a sandbox.
+#                          account, which never reaches a sandbox.
 #
 # A module inherits nothing, so the settings are repeated here with one more `..`
 # than the parent.

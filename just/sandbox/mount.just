@@ -8,10 +8,10 @@
 
 # create -> fill -> setup -> observe. Stops at observe by design: teardown is
 # ALWAYS an explicit separate decision, never chained.
-mount RUN_ID *FLAGS:
+mount RUN_ID:
     #!/usr/bin/env bash
     set -euo pipefail
-    just sbx lifecycle create "{{RUN_ID}}" {{FLAGS}}
+    just sbx lifecycle create "{{RUN_ID}}"
     ID=$(sandbox_mount/host/run_record.py list | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["run_id"])')
     just sbx lifecycle fill    "$ID"
     just sbx lifecycle setup   "$ID"

@@ -1,18 +1,18 @@
-# just/sandbox/runs.just — readback. What ran, what it cost, which one won.
+# just/sandbox/runs.just — readback. What ran, and whether its VM is still alive.
 #
 # This is the half of best-of-N that is not "launch N sandboxes". Launching is
 # easy; the decision needs the results side by side. Every phase writes to
 # .sandbox/runs/<id>.json, so these recipes are pure reads over that plus, while
-# a run is still alive, its trace db on the VM.
+# a run is still alive, its trace db on the VM. Per-run cost comes from pi's own
+# accounting: `just obs sessions` shows `total_cost`.
 #
 # Formatting is done in python rather than a shell read-loop: the record has
-# legitimately-empty fields (spend is null until teardown), and a tab-delimited
-# read-loop mis-assigns them, which showed up as the vm name landing in the
-# SPEND column. One pass, no field shifting.
+# optional fields, and a tab-delimited read-loop mis-assigns them. One pass, no
+# field shifting.
 #
 # Imported by the root justfile, so no `set` lines here.
 
-# every run: state, whether its VM is still alive, spend
+# every run: state, whether its VM is still alive
 list:
     #!/usr/bin/env bash
     set -uo pipefail

@@ -14,9 +14,9 @@
 # Nothing here ever destroys a VM. A failure reports and exits non-zero with the
 # box left alive, because the evidence you need to diagnose it is on that box.
 #
-# OPENROUTER_PROVISIONING_KEY is never read in this file and must never be. Only
-# the mint/revoke phases touch it, and it never leaves the host. We also never
-# ask ssh to forward host env (no SendEnv), so nothing from .env leaks over.
+# No sandbox-minted credentials exist: the only host-only credential is the
+# exe.dev account, and it never leaves the host. We also never ask ssh to forward
+# host env (no SendEnv), so nothing from .env leaks over.
 set working-directory := '../../..'
 set positional-arguments
 set dotenv-load

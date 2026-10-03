@@ -157,5 +157,5 @@ apps/inkwell/inkwell.db*
 
 *.mov
 
-# sandbox mount: per-run records hold live OpenRouter key hashes
+# sandbox mount: per-run records, harvest bundles, and artifacts
 .sandbox/

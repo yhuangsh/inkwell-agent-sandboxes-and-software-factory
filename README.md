@@ -61,7 +61,7 @@ Every resource this system leans on, what it does, and whether you actually need
 | [exe.dev account](https://exe.dev) | the disposable VMs the factory runs inside | required to mount | not needed |
 | [Pi](https://github.com/badlogic/pi-mono) + [Claude Code](https://claude.com/claude-code) | the coding agents | Pi is installed/upgraded to registry-latest by provision; Claude Code is only needed on the host for `just local cc` / `just sbx orch cc` | not needed |
 
-One credential is the entire reason the sandbox is safe: the **exe.dev account** lives only on your host. Any LLM provider keys you declare in `.env` are carried into each sandbox by FILL, written 0600 to `app/.env`, and read by pi's built-in providers. Everything else is a fast, free toolchain install. If you only want to understand the design, clone the repo and read: no account, nothing to spend.
+One credential is the entire reason the sandbox is safe: the **exe.dev account** lives only on your host. Any LLM provider keys you declare in `.env` are carried into each sandbox by FILL, written 0600 to `app/.env`, and read by pi's built-in providers. The same path carries one optional app-repo git token (`APP_REPO_GIT_TOKEN`) when your app repo is private. Everything else is a fast, free toolchain install. If you only want to understand the design, clone the repo and read: no account, nothing to spend.
 
 ---
 
@@ -142,7 +142,7 @@ The per-app input that lives *in this repo* is a roster file in `adws/adw_sssf_c
 
 ```yaml
 app:
-  repo: https://github.com/<owner>/<app-repo>.git   # public, unauthenticated clone
+  repo: https://github.com/<owner>/<app-repo>.git   # public, or private with APP_REPO_GIT_TOKEN in .env
   ref: main                 # optional: branch/tag/sha, default remote HEAD
   path: target              # mount point inside the factory clone
   manifest: sssf.app.yaml   # optional override; default sssf.app.yaml
@@ -219,7 +219,7 @@ just sbx manage doctor            # must end with: sbx doctor: OK
 
 ### 1. Set up a new app
 
-Make your app repo public, and put a `sssf.app.yaml` at its root (the schema is in [The app contract](#the-app-contract); [`hello-server`](https://github.com/yhuangsh/hello-server.git) is the worked example). Then give the factory one roster naming it:
+Make your app repo **public** (zero config, clones unauthenticated) **or private** (set a token), and put a `sssf.app.yaml` at its root (the schema is in [The app contract](#the-app-contract); [`hello-server`](https://github.com/yhuangsh/hello-server.git) is the worked example). Then give the factory one roster naming it:
 
 ```bash
 # start from the shipped hello-server example and edit the `app:` block
@@ -237,6 +237,8 @@ echo 'SSSF_CONFIG=adws/adw_sssf_config/sssf.myapp.config.yaml' >> .env
 
 just sbx manage doctor            # re-check: now validates YOUR roster's provider keys
 ```
+
+**Private app repo.** If your repo is private, set `APP_REPO_GIT_TOKEN` in `.env` to a git personal access token with read access to it (the factory repo itself stays public and credential-free). FILL ships the token to `app/.env` (0600) on the VM through the same stdin-only credential path as the LLM keys, and the clone authenticates through an ephemeral `GIT_ASKPASS` helper, so the stored remote URL never carries the token. A private repo mounted without the token fails FILL with a named error telling you to set `APP_REPO_GIT_TOKEN`. Never put the token in a roster — rosters are committed.
 
 ### 2. Mount
 

@@ -53,6 +53,17 @@ app:
   path: target
   manifest: sssf.app.yaml   # carried by the app repo: bun runtime, install,
                             # serve `bun run server.ts` on 4501, checks.test
+                            #
+                            # CAVEAT — the toy-app VM leg must fix this first.
+                            # hello-server declares `checks:` as the compact map
+                            # {test: [bun, test, server.test.ts]}; quality._load_checks
+                            # iterates a LIST of {name, area, operation, argv}, so the
+                            # map raises TypeError ("string indices must be integers")
+                            # and aborts the in-sandbox SDLC's test phase. Resolve
+                            # app-side (rewrite checks to the list form; keeps "zero
+                            # factory code edits" true) or normalize quality.py in a
+                            # separately authorized run. Verified in session 83c5881a;
+                            # see its context_handoff/blocked_report.md.
 
 agents:
   - name: planner

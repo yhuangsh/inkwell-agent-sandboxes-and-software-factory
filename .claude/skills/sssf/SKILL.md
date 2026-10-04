@@ -8,6 +8,8 @@ argument-hint: "[install | create adw | run adw | update config | ...]"
 
 Reusable combination of **agents plus code**: deterministic Python ADW scripts own sequencing, retries, and acceptance; coding agents (Pi in v1) work inside bounded phases; typed JSON envelopes carry context between them; everything streams into SQLite for the polled visualizer. Agent proposes, code disposes.
 
+One app per roster. The `app:` block in `sssf.config.yaml` is THE per-app input (`repo`/`ref`/`path`/`manifest`). With `repo` set, FILL clones that public repo to `~/app/<path>` in the mounted sandbox, the run branch `sbx/<id>` and every ADW commit live on that clone, and HARVEST bundles from it — the factory clone stays byte-identical across apps. No `repo` keeps the payload vendored in the factory clone.
+
 ## Startup
 
 Three steps. Then stop.

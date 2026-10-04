@@ -62,12 +62,26 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
     cfg = agents.load_config(config)
     agents.validate(cfg, REQUIRED_AGENTS)
     run = session.ensure(cfg, adw_id)
-    baseline = git_helper.rev("HEAD")     # pinned before this run commits anything
+    # Target mode commits to the app's own clone; vendored mode to the factory
+    # root. Everything below (baseline, commits, change capture) uses `payload`.
+    payload = git_helper.payload_root(cfg.app, run.repo_root)
+    baseline = git_helper.rev("HEAD", repo=payload)   # pinned before this run commits anything
 
-    def commit(ph, envelope) -> None:
-        """Commit what the preceding phase produced, in that agent's own words."""
+    def commit(ph, envelope, allow_empty: bool = False) -> None:
+        """Commit what the preceding phase produced, in that agent's own words.
+
+        `allow_empty` is for the phases whose product is factory-side in target
+        mode (the plan in `specs/`, the write-up in `app_docs/`): the payload repo
+        is legitimately clean and the product rides home in the teardown tar. A
+        build that changed nothing in the payload IS an anomaly — that stays strict.
+        """
         message = envelope.commit_message or f"sssf({run.adw_id}): {envelope.summary}"
-        ph.log(sha=git_helper.commit_all(message), message=message)
+        sha = git_helper.commit_all(message, repo=payload, allow_empty=allow_empty)
+        if sha:
+            ph.log(sha=sha, message=message)
+        else:
+            ph.log(sha="", message=message,
+                   note="payload repo clean — the artifact rides home in the teardown tar")
 
     def record(ph, result) -> None:
         """Log a deterministic block's verdict — the same shape every ADW uses."""
@@ -77,7 +91,7 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
 
     with run.phase(PhaseParams(name="request", kind="engineer", owner=run.engineer,
                                description="Capture the incoming ask")) as ph:
-        ph.log(input=prompt, baseline=git_helper.short_sha(baseline))
+        ph.log(input=prompt, baseline=git_helper.short_sha(baseline, repo=payload))
 
     with run.phase(PhaseParams(name="plan", kind="agent", owner="planner",
                                description="Turn the request into an implementable plan")) as ph:
@@ -86,7 +100,7 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
 
     with run.phase(PhaseParams(name="commit_plan", kind="code", owner="git",
                                description="Put the spec on record before any code exists to blur it")) as ph:
-        commit(ph, plan)
+        commit(ph, plan, allow_empty=True)
 
     with run.phase(PhaseParams(name="build", kind="agent", owner="builder",
                                description="Implement the plan exactly")) as ph:
@@ -168,7 +182,7 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
 
         with run.phase(PhaseParams(name="commit_docs", kind="code", owner="git",
                                    description="Ship the write-up in its own commit, beside the code it describes")) as ph:
-            commit(ph, document)
+            commit(ph, document, allow_empty=True)
 
     return run.finish(accepted=verified,
                       reason="the suite or the review never came back clean")

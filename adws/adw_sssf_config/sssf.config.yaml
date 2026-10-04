@@ -38,11 +38,16 @@ observability:
 
 # The per-app input. FILL ships this file verbatim to the VM; provision.sh reads
 # `path`/`manifest` to provision the app, and quality.py reads the manifest's
-# `checks:`. Phase 0 compat: no `repo` means the payload is vendored in the
-# factory clone at `apps/inkwell` — today's layout. Phase 2 introduces a separate
-# target clone via `repo:`/`ref:`.
+# `checks:`. Phase 2 target mode: `repo` names a PUBLIC app repo that FILL clones
+# into `~/app/<path>`. The run branch `sbx/<id>` and every ADW commit live on that
+# clone, and HARVEST bundles from it — the factory clone stays byte-identical
+# across apps. No `repo` means the payload is vendored in the factory clone
+# (Phase 0 compat). `apps/inkwell` stays vendored until Phase 3 and is simply
+# unused here.
 app:
-  path: apps/inkwell
+  repo: https://github.com/yhuangsh/inkwell.git   # public, unauthenticated clone
+  ref: main
+  path: target
   manifest: sssf.app.yaml
 
 agents:

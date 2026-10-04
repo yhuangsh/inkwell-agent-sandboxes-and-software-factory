@@ -39,7 +39,41 @@ fill RUN_ID *SHA:
     fi
     HOST="$VM.exe.xyz"   # all *.exe.xyz share one host key; the wildcard known_hosts entry is installed
 
-    echo "==> fill: $VM — cloning app/ ${PIN:+(pin $PIN)}"
+    # ── the per-app input: which payload this run commits to ──────────────
+    # The ACTIVE roster. The root justfile's `config` variable is NOT visible here
+    # (this phase file is imported into the `sbx::lifecycle` module, and modules
+    # inherit no variables), so read the same env var the root's
+    # env_var_or_default reads, with the same fallback. Parsed here, shipped below.
+    ROSTER="${SSSF_CONFIG:-adws/adw_sssf_config/sssf.config.yaml}"
+
+    # Phase 2: `app.repo` set means TARGET mode — the payload is its own clone of
+    # that public repo at app/<path>, and every ADW commit lands there. Empty
+    # means VENDORED mode — the payload lives in the factory clone (Phase 0/1).
+    # awk stays for the roster's flat blocks; the manifest (nested) gets the uv
+    # PEP-723 probe provision.sh established.
+    APP_REPO=$(awk '
+      /^app:[[:space:]]*$/      { a=1; next }
+      /^[^[:space:]]/           { a=0 }
+      a && /^[[:space:]]+repo:[[:space:]]/ { print $2; exit }
+    ' "$ROSTER")
+    APP_REF=$(awk '
+      /^app:[[:space:]]*$/      { a=1; next }
+      /^[^[:space:]]/           { a=0 }
+      a && /^[[:space:]]+ref:[[:space:]]/ { print $2; exit }
+    ' "$ROSTER")
+    APP_PATH=$(awk '
+      /^app:[[:space:]]*$/      { a=1; next }
+      /^[^[:space:]]/           { a=0 }
+      a && /^[[:space:]]+path:[[:space:]]/ { print $2; exit }
+    ' "$ROSTER")
+    [ -n "$APP_REPO" ] && [ -z "$APP_PATH" ] && APP_PATH=target
+    if [ -n "$APP_REPO" ]; then MODE=target; else MODE=vendored; fi
+
+    if [ "$MODE" = target ]; then
+        echo "==> fill: $VM — factory clone ${PIN:+(pin $PIN)} + target clone $APP_REPO -> app/$APP_PATH${APP_REF:+ (ref $APP_REF)}"
+    else
+        echo "==> fill: $VM — factory clone ${PIN:+(pin $PIN)} (vendored payload)"
+    fi
 
     # One remote script over stdin instead of a quoted one-liner: nothing here has
     # to survive two layers of shell quoting. Progress goes to stderr so stdout
@@ -48,9 +82,10 @@ fill RUN_ID *SHA:
     # args into one string that the remote login shell re-parses, so an empty "$PIN"
     # in the middle collapses to nothing and every argument after it shifts left.
     # MEASURED: with the pin second, an unpinned fill died on `$3: unbound variable`.
-    CLONE_OUT=$(ssh "$HOST" bash -s -- "$REPO" "{{RUN_ID}}" "$PIN" <<'REMOTE'
+    # mode is a REQUIRED positional here so pin can stay last.
+    CLONE_OUT=$(ssh "$HOST" bash -s -- "$REPO" "{{RUN_ID}}" "$MODE" "$PIN" <<'REMOTE'
     set -euo pipefail
-    repo="$1"; run_id="$2"; pin="${3:-}"
+    repo="$1"; run_id="$2"; mode="$3"; pin="${4:-}"
 
     if [ -d app/.git ]; then
         # Idempotent re-run (also the golden-VM cp path, where app/ arrives stale).
@@ -72,29 +107,35 @@ fill RUN_ID *SHA:
         git -C app checkout --quiet "$pin"
     fi
 
-    # The run branch. Created at whatever HEAD already is, so it adds no commit,
+    # The run branch exists only in VENDORED mode. In target mode the factory
+    # clone is the toolbelt and is never committed to inside a sandbox — the run
+    # branch lives on the target clone instead (the second script below). A branch
+    # nobody commits to is a second source of "where the run is".
+    # In vendored mode: created at whatever HEAD already is, so it adds no commit,
     # changes no file, and leaves the tree byte-identical — gate assertion A
     # compares HEAD's sha to the record and does not care what the branch is
     # called. Every commit the ADW makes now lands here instead of on main, which
     # is what lets HARVEST bundle exactly this run's work and nothing else.
     # Existing branch on a re-fill: switch to it, never re-create. Its commits ARE
     # the run's output.
-    branch="sbx/$run_id"
-    if git -C app rev-parse --verify --quiet "refs/heads/$branch" > /dev/null; then
-        git -C app switch --quiet "$branch"
-        echo "on existing run branch $branch" >&2
-        # Switching back to the run branch UNDOES the `checkout $pin` above — the
-        # branch still points where it did, so a re-fill onto a newer pin silently
-        # kept the old code and only the gate noticed. Advance the branch itself,
-        # ff-only so it can never move backwards over commits the run produced.
-        # A pin that is not a descendant is a real conflict: say so, let the gate
-        # fail, and leave the run's work alone.
-        if [ -n "$pin" ] && ! git -C app merge --ff-only --quiet "$pin"; then
-            echo "WARN: $branch cannot fast-forward to $pin — its commits are not on that line" >&2
+    if [ "$mode" = vendored ]; then
+        branch="sbx/$run_id"
+        if git -C app rev-parse --verify --quiet "refs/heads/$branch" > /dev/null; then
+            git -C app switch --quiet "$branch"
+            echo "on existing run branch $branch" >&2
+            # Switching back to the run branch UNDOES the `checkout $pin` above — the
+            # branch still points where it did, so a re-fill onto a newer pin silently
+            # kept the old code and only the gate noticed. Advance the branch itself,
+            # ff-only so it can never move backwards over commits the run produced.
+            # A pin that is not a descendant is a real conflict: say so, let the gate
+            # fail, and leave the run's work alone.
+            if [ -n "$pin" ] && ! git -C app merge --ff-only --quiet "$pin"; then
+                echo "WARN: $branch cannot fast-forward to $pin — its commits are not on that line" >&2
+            fi
+        else
+            git -C app switch --quiet -c "$branch"
+            echo "run branch $branch created" >&2
         fi
-    else
-        git -C app switch --quiet -c "$branch"
-        echo "run branch $branch created" >&2
     fi
 
     # Resolve the pin remotely rather than prefix-matching on the host: the pin may
@@ -109,7 +150,7 @@ fill RUN_ID *SHA:
 
     read -r HEAD_SHA INTENDED <<< "$CLONE_OUT"
     if [ -z "${HEAD_SHA:-}" ]; then
-        echo "fill: clone produced no HEAD sha on $VM — VM left up for debugging" >&2
+        echo "fill: factory clone produced no HEAD sha on $VM — VM left up for debugging" >&2
         exit 1
     fi
 
@@ -119,26 +160,113 @@ fill RUN_ID *SHA:
     # "the run committed nothing" while the commits sat on the branch, unbundled.
     if [ -n "$PIN" ]; then
         if [ -z "${INTENDED:-}" ]; then
-            echo "fill: pin '$PIN' does not resolve to a commit in the clone — VM left up" >&2
+            echo "fill: pin '$PIN' does not resolve to a commit in the factory clone — VM left up" >&2
             exit 1
         fi
         if [ "$HEAD_SHA" != "$INTENDED" ]; then
-            echo "fill: GATE FAILED — HEAD $HEAD_SHA != intended $INTENDED — VM left up" >&2
-            echo "      commit_sha left at $("$RR" get {{RUN_ID}} commit_sha) — harvest baseline intact" >&2
+            echo "fill: GATE FAILED — factory HEAD $HEAD_SHA != intended $INTENDED — VM left up" >&2
+            echo "      factory_sha left at $("$RR" get {{RUN_ID}} factory_sha) — VM left up" >&2
             exit 1
         fi
-        echo "==> fill: gate ok — HEAD $HEAD_SHA matches pin $PIN"
+        echo "==> fill: factory gate ok — HEAD $HEAD_SHA matches pin $PIN"
     else
-        echo "==> fill: no pin — HEAD $HEAD_SHA (recorded)"
+        echo "==> fill: factory no pin — HEAD $HEAD_SHA (recorded)"
     fi
 
-    # commit_sha is what makes N runs comparable, so record the sha that is actually
-    # checked out, never the one that was asked for.
-    "$RR" set {{RUN_ID}} commit_sha="$HEAD_SHA"
     # factory_sha is the factory clone's own HEAD. Phase 0: factory and payload are
     # one clone, so it equals commit_sha by construction. Phase 2 splits them —
-    # commit_sha then tracks the target clone and this one keeps the toolbelt sha.
+    # commit_sha tracks the target clone and this one keeps the toolbelt sha.
     "$RR" set {{RUN_ID}} factory_sha="$HEAD_SHA"
+
+    if [ "$MODE" = vendored ]; then
+        # Phase 0/1: factory and payload are one clone, so commit_sha is its HEAD.
+        "$RR" set {{RUN_ID}} commit_sha="$HEAD_SHA"
+        echo "==> fill: vendored payload — commit_sha = factory_sha = $HEAD_SHA"
+    else
+        # ── the target clone: the payload the run actually commits to ─────────
+        # Mirrors the factory clone pattern (idempotent fetch / ff-only / pin),
+        # then puts the run branch ON THE TARGET. app_ref is the OPTIONAL argument
+        # and MUST stay last for the same ssh-argv reason as the factory script.
+        CLONE2_OUT=$(ssh "$HOST" bash -s -- "$APP_REPO" "{{RUN_ID}}" "$APP_PATH" "$APP_REF" <<'REMOTE2'
+    set -euo pipefail
+    repo="$1"; run_id="$2"; path="$3"; ref="${4:-}"
+
+    dir="app/$path"
+    if [ -d "$dir/.git" ]; then
+        # Idempotent re-run: fetch, and follow main only when no ref pins us.
+        echo "$dir/ already present — fetching" >&2
+        git -C "$dir" fetch --quiet --tags origin
+        if [ -z "$ref" ]; then
+            # ff-only: a target that already ran an ADW carries commits that
+            # ARE the run's output. Never reset over them; report and go on.
+            if ! { git -C "$dir" checkout --quiet main && git -C "$dir" merge --ff-only --quiet origin/main; }; then
+                echo "WARN: could not fast-forward $dir to origin/main — keeping current HEAD" >&2
+            fi
+        fi
+    else
+        rm -rf "$dir"   # half-finished clone is not state; the VM is disposable
+        git clone --quiet "$repo" "$dir"
+    fi
+
+    if [ -n "$ref" ]; then
+        git -C "$dir" checkout --quiet "$ref"
+    fi
+
+    # The run branch, ON THE TARGET. Created at whatever HEAD already is, so
+    # it adds no commit and leaves the tree byte-identical. Every ADW commit
+    # now lands here, which is what lets HARVEST bundle exactly this run.
+    # Existing branch on a re-fill: switch to it, never re-create.
+    branch="sbx/$run_id"
+    if git -C "$dir" rev-parse --verify --quiet "refs/heads/$branch" > /dev/null; then
+        git -C "$dir" switch --quiet "$branch"
+        echo "on existing run branch $branch" >&2
+        # Switching back UNDOES the `checkout $ref` above; advance the branch
+        # itself, ff-only so it can never move backwards over the run's work.
+        if [ -n "$ref" ] && ! git -C "$dir" merge --ff-only --quiet "$ref"; then
+            echo "WARN: $branch cannot fast-forward to $ref — its commits are not on that line" >&2
+        fi
+    else
+        git -C "$dir" switch --quiet -c "$branch"
+        echo "run branch $branch created on $dir" >&2
+    fi
+
+    # Resolve the ref remotely: it may be short, a tag or a branch.
+    intended=""
+    if [ -n "$ref" ]; then
+        intended=$(git -C "$dir" rev-parse --verify --quiet "$ref^{commit}" || true)
+    fi
+    printf '%s %s\n' "$(git -C "$dir" rev-parse HEAD)" "$intended"
+    REMOTE2
+        )
+
+        read -r TARGET_SHA TARGET_INTENDED <<< "$CLONE2_OUT"
+        if [ -z "${TARGET_SHA:-}" ]; then
+            echo "fill: target clone produced no HEAD sha on $VM — VM left up for debugging" >&2
+            exit 1
+        fi
+
+        # TARGET GATE FIRST, then record. commit_sha is HARVEST's baseline, so a
+        # failed target gate must leave it untouched — same discipline as above.
+        if [ -n "$APP_REF" ]; then
+            if [ -z "${TARGET_INTENDED:-}" ]; then
+                echo "fill: target ref '$APP_REF' does not resolve to a commit — VM left up" >&2
+                exit 1
+            fi
+            if [ "$TARGET_SHA" != "$TARGET_INTENDED" ]; then
+                echo "fill: TARGET GATE FAILED — HEAD $TARGET_SHA != intended $TARGET_INTENDED — VM left up" >&2
+                echo "      commit_sha left at $("$RR" get {{RUN_ID}} commit_sha) — harvest baseline intact" >&2
+                exit 1
+            fi
+            echo "==> fill: target gate ok — HEAD $TARGET_SHA matches ref $APP_REF"
+        else
+            echo "==> fill: target no ref — HEAD $TARGET_SHA (recorded)"
+        fi
+
+        # commit_sha is what makes N runs comparable, so record the sha that is
+        # actually checked out on the target, never the one that was asked for.
+        "$RR" set {{RUN_ID}} commit_sha="$TARGET_SHA"
+        echo "==> fill: target payload — commit_sha $TARGET_SHA (factory_sha $HEAD_SHA)"
+    fi
 
     # ── ship the roster + a derived settings.json ────────────────────────────
     # No host pi state is mirrored any more: every provider the rosters name is a
@@ -146,11 +274,8 @@ fill RUN_ID *SHA:
     # the roster it is handed and its credentials from app/.env (shipped below);
     # pi's built-in catalog carries baseUrl/api/cost.
     #
-    # The base roster is the ACTIVE one. The root justfile's `config` variable is
-    # NOT visible here (this phase file is imported into the `sbx::lifecycle`
-    # module, and modules inherit no variables), so read the same env var the
-    # root's env_var_or_default reads, with the same fallback.
-    ROSTER="${SSSF_CONFIG:-adws/adw_sssf_config/sssf.config.yaml}"
+    # The base roster is the ACTIVE one — resolved near the top of this recipe
+    # (see the `app:` block parse) and shipped verbatim below.
 
     # FAIL FAST: every roster provider needs its key present in the host env
     # (dotenv-load already put .env vars there). roster_keys.sh owns the

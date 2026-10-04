@@ -1,6 +1,8 @@
 # ─── just/sandbox/observe.just — PHASE 5 · OBSERVE ────────────────────────────
 # Make a mounted sandbox watchable from outside without reaching in: start the
-# app (4501) and the trace UI (4600), retarget the HTTPS proxy, print URLs.
+# app (the roster's app.path, on the manifest's serve.port, default 4501) and the
+# trace UI (4600), retarget the HTTPS proxy, print URLs. A manifest with no
+# serve: block is a library/CLI app — the app lane is skipped, not failed.
 #
 # IMPORTED by the root justfile, not a module: no `set` lines here (the root
 # already owns `set dotenv-load` / `set positional-arguments`, and a duplicate
@@ -13,7 +15,7 @@
 # box still up, because the evidence you need lives on it. `just sbx lifecycle teardown` stays
 # an explicit, separate decision.
 
-# Phase 5 · start both servers if down, expose 4501 anonymously, print the URLs
+# Phase 5 · start both servers if down, expose the app port anonymously, print the URLs
 observe RUN_ID:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -31,9 +33,9 @@ observe RUN_ID:
 
     APP_PORT=4501
     OBS_PORT=4600
-    # The clone target is `app` relative to the exedev user's home, so this is
-    # /home/exedev/app on a stock exeuntu VM. Expanded on the VM, not here.
-    APP_DIR='$HOME/app/apps/inkwell'
+    # The factory clone is `app` relative to the exedev user's home, so this is
+    # /home/exedev/app on a stock exeuntu VM. The app dir itself comes from the
+    # roster's app.path (below); this visualizer path is factory machinery.
     OBS_DIR='$HOME/app/.claude/skills/sssf/apps/visualizer'
     OBS_DB='$HOME/app/adws/adw_data/sssf.db'
 
@@ -69,24 +71,80 @@ observe RUN_ID:
         return 0
     }
 
-    # ── 1. inkwell app on 4501 ───────────────────────────────────────────────
+    # ── the app lane is DATA: the roster names app.path, the app's own manifest
+    # names its serve: block. ONE parser, the uv PEP-723 probe provision.sh
+    # established (pyyaml), its own resolve noise on stderr and stdout exactly
+    # the shlex-quoted assignments. awk stays reserved for the roster's flat
+    # blocks; do not add a second YAML parser style.
+    APP_ENV=$(ssh "$HOST" 'uv run -' <<'PROBE'
+    # /// script
+    # dependencies = ["pyyaml"]
+    # ///
+    """Resolve app.path/app.manifest + the manifest's serve: block into shell vars."""
+
+    import shlex
+    from pathlib import Path
+
+    import yaml
+
+    try:
+        cfg = yaml.safe_load(Path("/home/exedev/sssf_config.yaml").read_text()) or {}
+    except FileNotFoundError:
+        cfg = {}
+    app = cfg.get("app") or {}
+    path = app.get("path") or "apps/inkwell"
+    manifest = app.get("manifest") or "sssf.app.yaml"
+    manifest_path = Path.home() / "app" / path / manifest
+    present = manifest_path.is_file()
+    data = (yaml.safe_load(manifest_path.read_text()) or {}) if present else {}
+    serve = data.get("serve") or {}
+    if not isinstance(serve, dict):
+        serve = {}
+
+    def emit(key, value):
+        print(f"{key}={shlex.quote(str(value))}")
+
+    emit("APP_PATH", path)
+    emit("APP_MANIFEST", manifest)
+    emit("SERVE_PRESENT", 1 if serve.get("command") else 0)
+    emit("SERVE_COMMAND", serve.get("command") or "")
+    emit("SERVE_PORT", serve.get("port") or 4501)
+    emit("SERVE_HEALTH_PATH", serve.get("health_path") or "/")
+    PROBE
+    ) || { echo "observe: app-lane probe failed on $VM — VM left up for debugging" >&2; exit 1; }
+    eval "$APP_ENV"
+    APP_PORT="$SERVE_PORT"
+    APP_DIR="\$HOME/app/$APP_PATH"      # expanded on the VM, not here
+
+    # ── 1. app on the manifest's declared port ───────────────────────────────
     # Idempotent: observe is safe to re-run, and `just sbx mount` ends here, so a
-    # second call must not stack a second bun on the same port.
-    echo "[2/6] app  :$APP_PORT"
-    if listening "$APP_PORT"; then
-        echo "       already listening — leaving it alone"
+    # second call must not stack a second server on the same port. A manifest
+    # with no serve: block is a library/CLI app — skip the lane, do not fail.
+    APP_STARTED=0
+    if [ "$SERVE_PRESENT" != "1" ]; then
+        echo "[2/6] app  skipped — no serve: in $APP_PATH/$APP_MANIFEST"
     else
-        # All three detachment pieces are REQUIRED or ssh never returns: nohup
-        # (survive session end), the redirect (release stdout/stderr), and
-        # < /dev/null (release stdin). Dropping any one hangs this recipe.
-        ssh "$HOST" "cd $APP_DIR && ( nohup bun run server.ts > \$HOME/inkwell-app.log 2>&1 < /dev/null & echo \$! )" \
-            | sed 's/^/       started pid /'
-        if ! wait_listen "$APP_PORT"; then
-            echo "observe: inkwell never bound :$APP_PORT — tail of ~/inkwell-app.log:" >&2
-            ssh "$HOST" 'tail -n 40 $HOME/inkwell-app.log' >&2 || true
-            exit 1
+        echo "[2/6] app  :$APP_PORT  ($APP_PATH)"
+        if listening "$APP_PORT"; then
+            echo "       already listening — leaving it alone"
+            APP_STARTED=1
+        else
+            # All three detachment pieces are REQUIRED or ssh never returns: nohup
+            # (survive session end), the redirect (release stdout/stderr), and
+            # < /dev/null (release stdin). Dropping any one hangs this recipe.
+            # PORT= goes BEFORE nohup: `nohup PORT=x cmd` makes nohup try to exec
+            # a program literally named "PORT=x"; as a prefix on nohup the
+            # assignment lands in its environment and the server inherits it.
+            ssh "$HOST" "cd $APP_DIR && ( PORT=$APP_PORT nohup $SERVE_COMMAND > \$HOME/app-server.log 2>&1 < /dev/null & echo \$! )" \
+                | sed 's/^/       started pid /'
+            if ! wait_listen "$APP_PORT"; then
+                echo "observe: app never bound :$APP_PORT — tail of ~/app-server.log:" >&2
+                ssh "$HOST" 'tail -n 40 $HOME/app-server.log' >&2 || true
+                exit 1
+            fi
+            echo "       up"
+            APP_STARTED=1
         fi
-        echo "       up"
     fi
 
     # ── 2. visualizer on 4600 ────────────────────────────────────────────────
@@ -122,16 +180,25 @@ observe RUN_ID:
     fi
 
     # ── 3. proxy ─────────────────────────────────────────────────────────────
-    # MANDATORY. A fresh exeuntu VM proxies port 8000 (smallest EXPOSEd port
-    # >= 1024); without this retarget https://$HOST/ hits nothing. set-public
-    # applies to the primary port only — see the note printed at the end.
-    echo "[4/6] proxy -> :$APP_PORT, public"
-    ssh exe.dev share port "$VM" "$APP_PORT"
-    ssh exe.dev share set-public "$VM"
+    # Retarget the proxy only when a server was started: a manifest with no
+    # serve: block has nothing to expose. A fresh exeuntu VM proxies port 8000
+    # (smallest EXPOSEd port >= 1024); set-public applies to the primary port
+    # only — see the note printed at the end.
+    if [ "$APP_STARTED" = 1 ]; then
+        echo "[4/6] proxy -> :$APP_PORT, public"
+        ssh exe.dev share port "$VM" "$APP_PORT"
+        ssh exe.dev share set-public "$VM"
+    else
+        echo "[4/6] proxy skipped — no app server to expose"
+    fi
 
     # ── 4. record ────────────────────────────────────────────────────────────
     echo "[5/6] recording ports"
-    "$RR" set {{RUN_ID}} "ports={\"app\":$APP_PORT,\"obs\":$OBS_PORT}"
+    if [ "$APP_STARTED" = 1 ]; then
+        "$RR" set {{RUN_ID}} "ports={\"app\":$APP_PORT,\"obs\":$OBS_PORT}"
+    else
+        "$RR" set {{RUN_ID}} "ports={\"obs\":$OBS_PORT}"
+    fi
 
     # ── 5. verify ────────────────────────────────────────────────────────────
     # curl with no auth of any kind — that is the whole point of the app check.
@@ -141,19 +208,24 @@ observe RUN_ID:
         curl -s -o /dev/null -w '%{http_code}' --max-time 20 "$1" || echo 000
     }
 
-    # The public flag can lag the API call by a beat; retry before failing.
-    APP_CODE=000
-    for _ in 1 2 3 4 5 6; do
-        APP_CODE=$(code_of "https://$HOST/")
-        [ "$APP_CODE" = "200" ] && break
-        sleep 2
-    done
-    if [ "$APP_CODE" != "200" ]; then
-        echo "observe: app returned $APP_CODE anonymously at https://$HOST/ (want 200)" >&2
-        echo "         VM left up. Check: ssh exe.dev share show $VM" >&2
-        exit 1
+    # The public flag can lag the API call by a beat; retry before failing. The
+    # health path is the manifest's (default /); a run with no server skips it.
+    if [ "$APP_STARTED" = 1 ]; then
+        APP_CODE=000
+        for _ in 1 2 3 4 5 6; do
+            APP_CODE=$(code_of "https://$HOST$SERVE_HEALTH_PATH")
+            [ "$APP_CODE" = "200" ] && break
+            sleep 2
+        done
+        if [ "$APP_CODE" != "200" ]; then
+            echo "observe: app returned $APP_CODE anonymously at https://$HOST$SERVE_HEALTH_PATH (want 200)" >&2
+            echo "         VM left up. Check: ssh exe.dev share show $VM" >&2
+            exit 1
+        fi
+        echo "       app  200 anonymous"
+    else
+        echo "       app  skipped (no serve: in manifest)"
     fi
-    echo "       app  200 anonymous"
 
     # 307/401 anonymously is CORRECT for the obs port: alternate ports stay
     # auth-gated to users with VM access. Only a dead proxy (000) or a 5xx is a
@@ -167,9 +239,17 @@ observe RUN_ID:
 
     echo ""
     echo "════════════════════════════════════════════════════════════"
-    echo "  app  https://$HOST/"
+    if [ "$APP_STARTED" = 1 ]; then
+        echo "  app  https://$HOST$SERVE_HEALTH_PATH"
+    else
+        echo "  app  (none — no serve: in manifest)"
+    fi
     echo "  obs  https://$HOST:$OBS_PORT/"
     echo "════════════════════════════════════════════════════════════"
     echo "  The obs URL opens fine in a browser already signed in to exe.dev."
     echo "  Ports 3000-9999 are auto-forwarded by the proxy but auth-gated;"
-    echo "  only ONE port can ever be anonymous, and that is $APP_PORT."
+    if [ "$APP_STARTED" = 1 ]; then
+        echo "  only ONE port can ever be anonymous, and that is $APP_PORT."
+    else
+        echo "  no port is anonymous this run — the manifest declares no serve: block."
+    fi

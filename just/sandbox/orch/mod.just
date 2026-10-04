@@ -13,6 +13,12 @@
 #                          tear down. Belongs on the HOST: it needs the exe.dev
 #                          account, which never reaches a sandbox.
 #
+# The per-app input is the roster's `app:` block (`repo`/`ref`/`path`/`manifest`).
+# With `repo` set, FILL clones that public repo to `~/app/<path>` in the VM, the
+# run branch `sbx/<id>` and every ADW commit live on that clone, and HARVEST
+# bundles from it — the factory clone stays byte-identical across apps. No `repo`
+# keeps the payload vendored in the factory clone (Phase 0 compat).
+#
 # A module inherits nothing, so the settings are repeated here with one more `..`
 # than the parent.
 set working-directory := '../../..'

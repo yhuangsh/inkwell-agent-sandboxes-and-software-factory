@@ -152,6 +152,10 @@ adws/adw_data/sessions/
 # of which would have stamped a fake trace db into every target repo.
 sssf.db*
 
+# Phase 2: the app target clone lives inside the factory clone. Ignored so gate
+# A's `git status --porcelain` stays clean with a target checked out.
+/target/
+
 # inkwell
 apps/inkwell/inkwell.db*
 

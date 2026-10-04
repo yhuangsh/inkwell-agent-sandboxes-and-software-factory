@@ -53,6 +53,33 @@ teardown RUN_ID *FLAGS:
     CLOSED=$("$RR" get "$RUN_ID" closed_at)
     [ -n "$CLOSED" ] && echo "   (record already closed at $CLOSED — re-running the remaining steps)"
 
+    # Which payload the run used: the roster's app block (same awk as FILL). In
+    # target mode the manifest of the target clone is added to the tar set below;
+    # the target's CODE returns via the harvest bundle, but the manifest records
+    # exactly what the box ran, so it comes along with the factory-root state.
+    ROSTER="${SSSF_CONFIG:-adws/adw_sssf_config/sssf.config.yaml}"
+    APP_REPO=$(awk '
+      /^app:[[:space:]]*$/      { a=1; next }
+      /^[^[:space:]]/           { a=0 }
+      a && /^[[:space:]]+repo:[[:space:]]/ { print $2; exit }
+    ' "$ROSTER")
+    APP_PATH=$(awk '
+      /^app:[[:space:]]*$/      { a=1; next }
+      /^[^[:space:]]/           { a=0 }
+      a && /^[[:space:]]+path:[[:space:]]/ { print $2; exit }
+    ' "$ROSTER")
+    APP_MANIFEST=$(awk '
+      /^app:[[:space:]]*$/      { a=1; next }
+      /^[^[:space:]]/           { a=0 }
+      a && /^[[:space:]]+manifest:[[:space:]]/ { print $2; exit }
+    ' "$ROSTER")
+    [ -n "$APP_MANIFEST" ] || APP_MANIFEST=sssf.app.yaml
+    TAR_PATHS="specs app_docs adws/adw_data/sssf.db run.log"
+    if [ -n "$APP_REPO" ]; then
+        [ -n "$APP_PATH" ] || APP_PATH=target
+        TAR_PATHS="$TAR_PATHS $APP_PATH/$APP_MANIFEST"
+    fi
+
     # ── does the VM still exist? -------------------------------------------------
     # Ask the control plane rather than probing ssh: authoritative, and the same
     # answer fleet cleanup uses. Verified shape: {"vms":[{"vm_name":"...",...}]}
@@ -72,9 +99,9 @@ teardown RUN_ID *FLAGS:
         mkdir -p "$ART"
         TAR_TMP=$(mktemp "${TMPDIR:-/tmp}/sbx-$RUN_ID.XXXXXX")
         # One round trip, and `ls -d` filters to what actually exists so a run that
-        # died before writing app_docs/ is not an error.
+        # died before writing app_docs/ (or before the target clone) is not an error.
         ssh "${SSH_OPTS[@]}" "$VM".exe.xyz \
-            'cd app 2>/dev/null || exit 0; P=$(ls -d specs app_docs adws/adw_data/sssf.db run.log 2>/dev/null); [ -z "$P" ] && exit 0; tar cf - $P' \
+            "cd app 2>/dev/null || exit 0; P=\$(ls -d $TAR_PATHS 2>/dev/null); [ -z \"\$P\" ] && exit 0; tar cf - \$P" \
             > "$TAR_TMP" || true
         if [ -s "$TAR_TMP" ]; then
             tar xf "$TAR_TMP" -C "$ART"

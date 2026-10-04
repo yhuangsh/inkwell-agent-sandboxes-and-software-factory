@@ -117,44 +117,88 @@ setup RUN_ID CONFIG="":
     # up as ' M path'. Expected-vs-actual SHA is compared by prefix so a short
     # commit_sha in the record still matches a full HEAD.
     #
-    # The tree must be CLEAN. Nothing legitimately dirties it: the sandbox
-    # clones the repo and provisions around it, so any porcelain line at all
-    # means something wrote where it should not have.
+    # Phase 2 splits the two HEADs: factory_sha is the toolbelt clone's HEAD and
+    # commit_sha is the TARGET clone's HEAD (the harvest baseline). When the
+    # roster's `app:` block names a repo, the target clone must exist and match
+    # commit_sha; otherwise (vendored payload) commit_sha is the factory HEAD.
+    # Only the FACTORY tree must be clean — a target clone is ignored there, and
+    # provision's bun install may legitimately rewrite the target's bun.lock.
     echo "[gate] A git integrity"
-    if "${SSH[@]}" 'bash -s' "$SHA" "$FACTORY_SHA" <<'REMOTE_A'; then
+    A_MODE=""
+    if A_OUT=$("${SSH[@]}" 'bash -s' "$SHA" "$FACTORY_SHA" "$CONFIG" <<'REMOTE_A'
     set -uo pipefail
     cd "$HOME/app" || { echo "   no ~/app on this VM — FILL never ran"; exit 1; }
     want="${1:-}"
     factory="${2:-}"
-    head="$(git rev-parse HEAD)" || { echo "   git rev-parse failed — .git is damaged"; exit 1; }
-    echo "   HEAD     ${head}"
-    echo "   expected ${want}"
-    case "$head" in
-      "$want"*) ;;
-      *) echo "   HEAD does not match the recorded commit_sha"; exit 1 ;;
-    esac
+    cfg="${3:-}"
 
-    # factory_sha is the factory clone's own HEAD. Phase 0: one clone, so it is
-    # the same sha as commit_sha. A record predating the field reads empty — skip
-    # the assertion rather than fail a legitimate older run. Never destroys the VM.
-    if [ -n "$factory" ]; then
-      case "$head" in
-        "$factory"*) ;;
-        *) echo "   HEAD does not match the recorded factory_sha"; exit 1 ;;
+    # Which payload the record points at: the roster's app block decides. awk is
+    # fine here — the block is flat — and it mirrors FILL's parse.
+    app_repo=""; app_path=""
+    if [ -n "$cfg" ] && [ -f "$cfg" ]; then
+      app_repo=$(awk '/^app:[[:space:]]*$/ {a=1; next} /^[^[:space:]]/ {a=0}
+                      a && /^[[:space:]]+repo:[[:space:]]/ {print $2; exit}' "$cfg")
+      app_path=$(awk '/^app:[[:space:]]*$/ {a=1; next} /^[^[:space:]]/ {a=0}
+                      a && /^[[:space:]]+path:[[:space:]]/ {print $2; exit}' "$cfg")
+    fi
+    [ -n "$app_repo" ] && [ -z "$app_path" ] && app_path=target
+
+    head="$(git rev-parse HEAD)" || { echo "   git rev-parse failed — .git is damaged"; exit 1; }
+
+    if [ -n "$app_repo" ]; then
+      echo "   mode target"
+      # factory_sha is the factory clone's own HEAD — the toolbelt that ran the
+      # run. A record predating the field reads empty; skip rather than fail.
+      if [ -n "$factory" ]; then
+        case "$head" in
+          "$factory"*) ;;
+          *) echo "   factory HEAD $head does not match recorded factory_sha $factory"; exit 1 ;;
+        esac
+        echo "   factory  ${factory} (matches factory HEAD)"
+      fi
+      # commit_sha is the TARGET clone's HEAD — the harvest baseline.
+      tdir="$HOME/app/$app_path"
+      [ -d "$tdir/.git" ] || { echo "   target $app_path is not a git repository — FILL never cloned it"; exit 1; }
+      thead="$(git -C "$tdir" rev-parse HEAD)" || { echo "   target $app_path: git rev-parse failed"; exit 1; }
+      [ -n "$want" ] || { echo "   record has no commit_sha — FILL never completed"; exit 1; }
+      case "$thead" in
+        "$want"*) ;;
+        *) echo "   target HEAD $thead does not match the recorded commit_sha $want"; exit 1 ;;
       esac
-      echo "   factory  ${factory} (matches HEAD)"
+      echo "   target   ${want} (matches target HEAD)"
+      # Deliberately NOT asserting a clean target tree: provision's bun install
+      # may legitimately rewrite bun.lock. Only the factory clone must be clean.
+    else
+      echo "   mode vendored"
+      if [ -n "$factory" ]; then
+        case "$head" in
+          "$factory"*) ;;
+          *) echo "   factory HEAD $head does not match recorded factory_sha $factory"; exit 1 ;;
+        esac
+        echo "   factory  ${factory} (matches factory HEAD)"
+      fi
+      [ -n "$want" ] || { echo "   record has no commit_sha — FILL never completed"; exit 1; }
+      case "$head" in
+        "$want"*) ;;
+        *) echo "   factory HEAD $head does not match the recorded commit_sha $want"; exit 1 ;;
+      esac
+      echo "   commit_sha ${want} (matches factory HEAD)"
     fi
 
     porcelain="$(git status --porcelain)"
     if [ -n "$porcelain" ]; then
-      echo "   unexpected working-tree changes (the tree must be clean):"
+      echo "   unexpected working-tree changes in the factory clone (the tree must be clean):"
       printf '%s\n' "$porcelain" | sed 's/^/     /'
       exit 1
     fi
-    echo "   working tree clean"
+    echo "   factory working tree clean"
     REMOTE_A
-      echo "[gate] A PASS  git integrity"
+    ); then
+      printf '%s\n' "$A_OUT"
+      A_MODE=$(printf '%s\n' "$A_OUT" | awk '/^   mode /{print $2; exit}')
+      echo "[gate] A PASS  git integrity (${A_MODE:-unknown} payload)"
     else
+      printf '%s\n' "$A_OUT" >&2
       gate_fail "assertion A — git integrity"
     fi
 

@@ -28,6 +28,11 @@ class GateFailure(RuntimeError):
     pass
 
 
+class ValidationError(Exception):
+    """Config failed semantic validation (e.g. a prompt file lost its
+    COMMIT-LANE v1 marker). Raised before any agent spawns."""
+
+
 # ── config ───────────────────────────────────────────────────────────────────
 
 def load_config(path: str = "adws/adw_sssf_config/sssf.config.yaml") -> SSSFConfig:
@@ -65,6 +70,21 @@ def validate(cfg: SSSFConfig, required: list[str]) -> None:
                            ("user", agent.prompt_engineering.user)):
             if not Path(ref).is_file():
                 problems.append(f"agent {name!r}: {label} prompt not found: {ref}")
+        # Tamper guard: the builder's prompt FILES must carry the commit-lane
+        # marker that render() also injects. Injection alone would silently paper
+        # over a stripped file, so a missing marker is a named error before spawn.
+        # Agents without prompt files are exempt — render injection still covers
+        # them at runtime. Checked before resolve_model so the guard is
+        # host-independent. Only the agent named "builder" is checked.
+        if agent.name == "builder":
+            for label, ref in (("system", agent.prompt_engineering.system),
+                               ("user", agent.prompt_engineering.user)):
+                path = Path(ref)
+                if path.is_file() and prompts.COMMIT_LANE_MARKER not in path.read_text():
+                    raise ValidationError(
+                        f"agent 'builder': {label} prompt {ref} is missing the "
+                        f"{prompts.COMMIT_LANE_MARKER} marker — the commit-lane rule must be "
+                        f"present in the builder's prompt files, not only injected at render time")
         try:
             agent_pi.resolve_model(agent.model)
         except ValueError as e:

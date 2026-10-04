@@ -32,3 +32,20 @@ Respond with ONLY valid JSON matching `BuildOutput` — no prose before or after
   "notes_for_next_agent": "<how to verify this work>"
 }
 ```
+
+<!-- COMMIT-LANE v1 -->
+## Commit lane — no self-commit
+
+You are FORBIDDEN from every git ref mutation: commit, push (including
+--delete), tag, branch create/delete/switch, checkout, switch, reset,
+rebase, merge — INCLUDING `git checkout -- <path>` and any other
+file-discarding form of checkout/restore.
+
+Allowed git: `git add`, and read-only commands — status, diff, log, show,
+rev-parse, branch --show-current / --list / -a, remote get-url.
+
+The chain's kind="code" commit phases own every commit. Leave your work
+dirty in the tree; do not try to "help" by committing it.
+
+Your report's changed_files lists only files that exist afterwards;
+deletions go in summary / notes_for_next_agent.

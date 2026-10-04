@@ -35,6 +35,10 @@ harvest RUN_ID:
     RR="sandbox_mount/host/run_record.py"
     RUN_ID="{{ RUN_ID }}"
     BUNDLE=".sandbox/runs/$RUN_ID.bundle"
+    # Absolute twin of $BUNDLE for the `git -C <cache>` calls below: `-C` changes
+    # git's working directory, so a relative bundle path would resolve against the
+    # cache, not the repo root. `cd "{{ justfile_directory() }}"` above fixes $PWD.
+    BUNDLE_ABS="$PWD/$BUNDLE"
     BRANCH="sbx/$RUN_ID"
     DEST="refs/sandbox/$RUN_ID"
     # Same options teardown uses: BatchMode so this never sits at a prompt,
@@ -120,15 +124,15 @@ harvest RUN_ID:
         fi
         # Verify BEFORE fetching: a bundle whose base the cache does not have
         # fails loudly rather than importing disconnected history.
-        if ! git -C "$CACHE" bundle verify "$BUNDLE" > /dev/null 2>&1; then
+        if ! git -C "$CACHE" bundle verify "$BUNDLE_ABS" > /dev/null 2>&1; then
             echo "!! harvest: $BUNDLE failed verification against $CACHE — this host may not have $BASE"
-            git -C "$CACHE" bundle verify "$BUNDLE" || true
+            git -C "$CACHE" bundle verify "$BUNDLE_ABS" || true
             echo "!! the bundle is kept at $BUNDLE for inspection. VM left alone."
             exit 1
         fi
         # --force so a re-harvest of a run that committed more since last time
         # updates the ref instead of refusing a non-fast-forward.
-        git -C "$CACHE" fetch --force --quiet "$BUNDLE" "refs/heads/$BRANCH:$DEST" \
+        git -C "$CACHE" fetch --force --quiet "$BUNDLE_ABS" "refs/heads/$BRANCH:$DEST" \
             || { echo "!! harvest: fetch into $DEST failed — bundle kept at $BUNDLE"; exit 1; }
 
         echo "   harvest: $COUNT commit(s) -> $CACHE $DEST"

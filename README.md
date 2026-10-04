@@ -1,19 +1,19 @@
 # Factory In A Box
 
-> **A blog app, the software factory that builds it, and the throwaway sandbox that runs both.**
+> **The software factory and the throwaway sandbox it runs in — bring your own app.**
 > For engineers who want agents shipping code without a human in the loop.
 
 📺 Watch this video to get the full breakdown of this codebase: **[Factory In A Box on YouTube](https://youtu.be/SEI_qIW4o2c)**
 
 <p align="center">
-  <img src="images/09_factory_in_a_box.png" alt="Three nested tiers: the Inkwell app inside the factory inside a throwaway exe.dev VM, mounted and watched from the host" width="850">
+  <img src="images/09_factory_in_a_box.png" alt="The software factory and a throwaway exe.dev VM nested around a mounted app, watched from the host" width="850">
 </p>
 
-Three tiers nest here: **Inkwell** (a minimalist blog-writing app), the **[Super Simple Software Factory](https://github.com/disler/super-simple-software-factory)** (deterministic Python owns the graph, coding agents are bounded phases inside it), and the **sandbox mount system** (six host-side phases that stand the other two up on a disposable VM in about 10 seconds). The app is the payload. **The point is the loop that ships it without you in the middle.**
+Three things are separate here, and that separation is the whole design. **The factory** (this repo) is deterministic Python owning the graph, with coding agents as bounded phases inside it. **Your app** is any public git repo you bring, carrying a `sssf.app.yaml` manifest at its root. **The sandbox mount system** stands both up on a disposable VM in about 10 measured seconds. The factory repo contains **no app code** — the only per-app inputs are one roster file in `adws/adw_sssf_config/` and the LLM API keys you set in `.env`. **The point is the loop that ships your app without you in the middle.**
 
 You can get value from this repo two ways, and both are first-class:
 
-- **Run it.** Mount a throwaway VM, point the factory at a task, and watch agents ship code in isolation. Follow [Install](#install), then [How to run it end to end](#how-to-run-it-end-to-end).
+- **Run it.** Mount a throwaway VM, point the factory at a task, and watch agents ship code in isolation. Follow [Install](#install), then [Set up a new app and develop in a sandbox](#set-up-a-new-app-and-develop-in-a-sandbox).
 - **Read it.** Study a working out-of-the-loop system: the primitives, the credential boundary, the trace pipeline. You need almost nothing installed. Jump to [Who commands what](#who-commands-what) and [Watch it run](#watch-it-run).
 
 <p align="center">
@@ -28,25 +28,25 @@ You can get value from this repo two ways, and both are first-class:
 
 ```bash
 claude               # boot Claude Code in the repo root
-/install             # set up toolchain, deps, and .env, then run the preflight
-/prime               # orient on all three tiers (out-loop orchestrator, in-loop orchestrator, software factory), check live state
+/install             # set up toolchain, verify .env, then run the preflight
+/prime               # orient on all three layers (out-loop orchestrator, in-loop orchestrator, software factory), check live state
 ```
 
-`/install` and `/prime` live in `.claude/commands/`. `/install` checks the toolchain, installs app deps, verifies `.env`, and runs the `just sbx manage doctor` preflight without starting anything. `/prime` then walks the agent through the command surface, the specs, and the measured gotchas.
+`/install` and `/prime` live in `.claude/commands/`. `/install` checks the toolchain, verifies `.env`, and runs the `just sbx manage doctor` preflight without starting anything. `/prime` then walks the agent through the command surface, the specs, and the measured gotchas.
 
 Once oriented, you operate the whole system by talking to the agent. Two skills carry the knowledge, so you describe intent and the agent runs the right recipes:
 
-- **`/sssf-sandbox-orchestrator`** drives the out-of-sandbox loop from plain English: mount a box, put work in, watch it, fan out best-of-N, harvest the XYZ sandbox, tear down. Thin skill, fat recipes: every action it takes is a `just sbx` command you could type yourself.
+- **`/sssf-sandbox-orchestrator`** drives the out-of-sandbox loop from plain English: mount a box, put work in, watch it, fan out best-of-N, harvest the winner, tear down. Thin skill, fat recipes: every action it takes is a `just sbx` command you could type yourself.
 - **`/sssf`** drives the factory from inside a box: create, run, and observe the ADWs, and manage the agent roster.
 
 ### Manual Install
 
 ```bash
 cp .env.sample .env                  # optional overrides plus the LLM API keys FILL provisions into each sandbox as app/.env
-cd apps/inkwell && bun install       # app deps
 just sbx manage doctor               # five-check preflight: ssh, helpers, provisioner, roster keys, adw layer
-just inkwell test                    # 30 tests green = the payload works
 ```
+
+There is no app-dependency step: your app is its own repo, cloned inside the sandbox by FILL. Set only the provider keys the active roster's models need — FILL fails fast and names the missing ones.
 
 ### Required Tech
 
@@ -55,11 +55,11 @@ Every resource this system leans on, what it does, and whether you actually need
 | Tech | Role in the system | Run the loop | Just read + observe |
 |---|---|---|---|
 | [`git`](https://git-scm.com) | clone the repo; the factory commits its own work | required | required |
-| [`bun`](https://bun.sh) | serves Inkwell (:4501) and the observability UI | required | optional (only to boot the UI locally) |
-| [`uv`](https://docs.astral.sh/uv/) | runs the PEP-723 Python ADW scripts | required | not needed |
-| [`just`](https://just.systems) | the whole command surface (all four namespaces) | required | helpful (to read the recipes) |
+| [`bun`](https://bun.sh) | serves the observability UI, and builds the visualizer; your app's own runtime is bootstrapped inside each sandbox by its manifest | required | optional (only to boot the UI locally) |
+| [`uv`](https://docs.astral.sh/uv/) | runs the PEP-723 Python ADW scripts and the manifest probes | required | not needed |
+| [`just`](https://just.systems) | the whole command surface | required | helpful (to read the recipes) |
 | [exe.dev account](https://exe.dev) | the disposable VMs the factory runs inside | required to mount | not needed |
-| [Claude Code](https://claude.com/claude-code) + [Pi](https://github.com/badlogic/pi-mono) | the coding agents that do the work | Pi is installed/upgraded to latest by provision; Claude Code is only needed on the host for `just local cc` / `just sbx orch cc` | not needed |
+| [Pi](https://github.com/badlogic/pi-mono) + [Claude Code](https://claude.com/claude-code) | the coding agents | Pi is installed/upgraded to registry-latest by provision; Claude Code is only needed on the host for `just local cc` / `just sbx orch cc` | not needed |
 
 One credential is the entire reason the sandbox is safe: the **exe.dev account** lives only on your host. Any LLM provider keys you declare in `.env` are carried into each sandbox by FILL, written 0600 to `app/.env`, and read by pi's built-in providers. Everything else is a fast, free toolchain install. If you only want to understand the design, clone the repo and read: no account, nothing to spend.
 
@@ -77,7 +77,7 @@ A system that needs you at every step does not scale, and you become the key-man
   <img src="images/13_agent_in_the_box.png" alt="Agent out reaches through the wall into your environment; agent in lives in the same room as the codebase" width="780">
 </p>
 
-The controversial call, stated plainly: **the coding agents run inside the sandbox**, not outside it driving a remote shell. Claude Code and Pi are installed on the VM, in the same room as the codebase. The host keeps only a thin orchestrator and two credentials that never leave.
+The controversial call, stated plainly: **the coding agent runs inside the sandbox**, not outside it driving a remote shell. Pi is installed on the VM by the provisioner, in the same room as the codebase. The host keeps only a thin orchestrator and two credentials that never leave.
 
 ---
 
@@ -92,7 +92,7 @@ Three command tiers, and each one commands only the tier inside it:
 | Tier | Lives | Does |
 | --- | --- | --- |
 | **Out-sandbox super orchestrator** | your machine | mounts, fills, observes, harvests, tears down sandboxes |
-| **In-sandbox orchestrator agent** | the VM, a resumable Claude Code session | receives delegated work, launches the factory, watches it, reports |
+| **In-sandbox orchestrator agent** | the VM, a resumable pi session | receives delegated work, launches the factory, watches it, reports |
 | **ADW agents** | bounded phases inside the factory | scout, plan, build, review, document |
 
 <p align="center">
@@ -118,21 +118,43 @@ just sbx run agent <id> "If you have not already: READ and EXECUTE .claude/skill
 
 ---
 
-## Tier 1: Inkwell, the payload
+## The app contract
 
-<p align="center">
-  <img src="images/07_inkwell_validated.png" alt="The Inkwell writing app: draft list on the left, markdown editor and live preview on the right" width="750">
-</p>
+The factory ships nothing app-specific. **An app is any public git repo with a `sssf.app.yaml` manifest at its root.** The manifest is how you tell a blank exeuntu VM what your app needs — without adding a line to this repo:
 
-A blog-writing app: drafts, a markdown editor with live preview, one-click publish. Bun plus `bun:sqlite`, zero dependencies, vanilla JS front end, port 4501. It is small on purpose: small enough to rebuild end to end, over and over, by agents. The 30-test suite is what the factory's test phase runs, by name, as code rather than an agent decision.
-
-```bash
-just inkwell run      # boot on :4501
-just inkwell dev      # reload-on-save
-just inkwell test     # the suite the factory runs
+```yaml
+# sssf.app.yaml — lives at the root of YOUR app repo.
+runtime: bun            # bun | node | uv | none — CDN-bootstrapped toolchains, never apt
+install:                # shell commands run once at provision, from the app root
+  - bun install
+build: []               # e.g. ["bun run build"]; [] for interpret-and-serve apps
+serve:                  # optional — OBSERVE's app lane; no serve: means a library/CLI, skipped not failed
+  command: bun run server.ts
+  port: 4501            # the ONE port the exe.dev proxy exposes anonymously
+  health_path: /        # OBSERVE curls https://<host><health_path> for 200
+checks:                 # optional — the SDLC quality gate, run from the app root
+  test: [bun, test, server.test.ts]   # map form: <name>: <argv>
 ```
 
-## Tier 2: the factory
+`checks:` accepts two shapes, and both work: the compact **map** (`test: [bun, test, server.test.ts]`, defaulting to `area: backend`, `operation: build`, `timeout_seconds: 120`) and the explicit **list** of `{name, area, operation, argv, timeout_seconds}` mappings.
+
+The per-app input that lives *in this repo* is a roster file in `adws/adw_sssf_config/`. Its one app-specific block names the repo and the mount point:
+
+```yaml
+app:
+  repo: https://github.com/<owner>/<app-repo>.git   # public, unauthenticated clone
+  ref: main                 # optional: branch/tag/sha, default remote HEAD
+  path: target              # mount point inside the factory clone
+  manifest: sssf.app.yaml   # optional override; default sssf.app.yaml
+```
+
+With `repo` set (target mode), FILL clones your app into `~/app/<path>` on the VM, the run branch `sbx/<run-id>` and every ADW commit live on that clone, and HARVEST bundles from it — the factory clone stays byte-identical across apps. Without `repo`, the payload is vendored in the factory clone (legacy compat).
+
+**The shipped worked example is [`hello-server`](https://github.com/yhuangsh/hello-server.git)** — a toy app whose manifest declares exactly the shape above: bun runtime, `bun install`, `serve` on port 4501, and a `checks.test`. Its roster is [`adws/adw_sssf_config/sssf.hello.config.yaml`](adws/adw_sssf_config/sssf.hello.config.yaml), and it is the repo you can mount end to end with zero factory edits.
+
+Two graceful fallbacks: a repo with **no manifest** but a `package.json` gets `bun install` at provision; a manifest with **no `serve:` block** has its app lane skipped, not failed.
+
+## The factory
 
 <p align="center">
   <img src="images/01_factory_spine.svg" alt="The factory spine: a deterministic ADW script sequencing plan, build, and test phases with agents as bounded nodes" width="750">
@@ -144,11 +166,13 @@ Twelve ADWs (AI Developer Workflows) under `adws/`, each a thin `uv run` script 
   <img src="images/value/03_core_four.png" alt="An agent is four things: a model, a harness, tools, and a prompt, wired around a central agent node" width="750">
 </p>
 
-Under every phase is the same primitive: an agent is a model, a harness, tools, and a prompt. The factory holds those four constant and swaps only the prompt and the model per phase. Staffing is one config file, swappable per run: five rosters ship in `adws/adw_sssf_config/`, the cheap default, the frontier roster, pure DeepSeek, open-weights, and top-speed. Every model is `provider/id`, resolved against pi's built-in provider catalog, so the same ids work on your laptop and inside every box.
+Under every phase is the same primitive: an agent is a model, a harness, tools, and a prompt. The factory holds those four constant and swaps only the prompt and the model per phase. Staffing is one config file, swappable per run: six rosters ship in `adws/adw_sssf_config/` — the cheap default (`sssf.config.yaml`), the frontier roster, pure DeepSeek, open-weights, top-speed, and `sssf.hello.config.yaml`, the per-app worked example. Every model is `provider/id`, resolved against pi's built-in provider catalog, so the same ids work on your laptop and inside every box.
+
+The active roster is chosen by the `SSSF_CONFIG` env var (default `adws/adw_sssf_config/sssf.config.yaml`); set it in `.env` or pass a path per run.
 
 The factory has its own standalone codebase at [disler/super-simple-software-factory](https://github.com/disler/super-simple-software-factory), the skill that stamps it into any repo. This repo just runs it.
 
-## Tier 3: the sandbox
+## The sandbox
 
 <p align="center">
   <img src="images/16_six_phase_run.png" alt="The run end to end: create, fill, setup on the host, execute inside, observe and teardown from the host, ~10s total cold mount" width="780">
@@ -156,21 +180,23 @@ The factory has its own standalone codebase at [disler/super-simple-software-fac
 
 Six phases take a blank exe.dev VM to a health-checked, running factory in about 10 measured seconds: create, fill, setup, execute, observe, teardown. Every phase is a `just` recipe a human could type; the run record on disk is the only state they share, so any crash leaves teardown a handle.
 
+Setup runs a **host-streamed provisioner**: the same `provision.sh` as your host checkout (`bash -s` over ssh stdin, never the VM's copy), so provisioner and gates can never skew. It bootstraps bun, just, and node+npm from their own CDNs, installs **pi at registry-latest**, then runs your manifest's `install:`/`build:` from the app root. **apt never.**
+
 <p align="center">
   <img src="images/10_credential_boundary.png" alt="The credential boundary: the exe.dev account never leaves the host; LLM provider keys are shipped into each sandbox as app/.env; a sandbox cannot mount sandboxes" width="750">
 </p>
 
-The whole repo ships to the VM. What a sandbox cannot do is *use* the orchestration half, because the exe.dev account never leaves the host. Each sandbox instead gets its LLM provider keys as `app/.env`, shipped by FILL and read by pi's built-in providers. **One level of nesting, enforced by credentials rather than by deleting files.**
+The factory clone ships to the VM as the toolbelt; your app is its own clone. What a sandbox cannot do is *use* the orchestration half, because the exe.dev account never leaves the host. Each sandbox instead gets its LLM provider keys as `app/.env`, shipped by FILL and read by pi's built-in providers. **One level of nesting, enforced by credentials rather than by deleting files.**
 
 <p align="center">
   <img src="images/17_best_of_n.png" alt="Best-of-N: one prompt fans out to three software factories and the results come back ranked" width="750">
 </p>
 
-Fan-out is a loop over configs: one prompt, N rosters, N boxes. Teardown is never automatic, and harvest never merges: a run's commits come home as `refs/sandbox/<run-id>`, parked for a human to compare and choose the winner.
+Fan-out is a loop over configs: one prompt, N rosters, N boxes. Teardown is never automatic, and harvest never merges: in target mode a run's commits come home as `refs/sandbox/<run-id>` inside a bare cache of your app repo (`.sandbox/repos/<repo>.git`), parked for a human to compare and choose the winner.
 
 ---
 
-## How to run it end to end
+## Set up a new app and develop in a sandbox
 
 <p align="center">
   <img src="images/20_command_tiers_pipeline.png" alt="A prompt on your machine wakes the idle out-sandbox orchestrator, crosses into the agent sandbox where the in-sandbox orchestrator runs the ADW agents in sequence: scout, plan, build, test, review, with a feedback loop back" width="780">
@@ -178,35 +204,95 @@ Fan-out is a loop over configs: one prompt, N rosters, N boxes. Teardown is neve
 
 The main flow, top to bottom. Every command is a `just` recipe you could type by hand.
 
+### 0. Prerequisites
+
 ```bash
-# 0. one-time: credentials + preflight
-cp .env.sample .env               # optional overrides; inference creds are the LLM API keys you set here
+# an exe.dev account, with ssh access (this is what the doctor pings)
+ssh exe.dev whoami
+
+# your credentials and config
+cp .env.sample .env               # set the LLM API keys the roster's providers need
 just sbx manage doctor            # must end with: sbx doctor: OK
-
-# 1. mount a throwaway VM into a running factory (~10s)
-just sbx mount my-feature         # prints the resolved run id and two URLs
-
-# 2. put work in (pick one path)
-just sbx lifecycle execute <run-id> "add a word-count badge to the editor footer"   # direct, detached
-just sbx run agent       <run-id> "READ and EXECUTE .claude/skills/sssf/SKILL.md. Then: <work>"  # delegated
-
-# 3. watch from outside
-just sbx manage list              # every run: state, VM alive
-just obs sessions                 # the ADW runs inside your boxes
-just obs tail <adw_id>            # live event stream for one run
-
-# 4. bring the commits home (safe, non-destructive, run any time)
-just sbx manage harvest <run-id>  # commits land in refs/sandbox/<run-id>
-
-# 5. tear it down (always an explicit human decision)
-just sbx lifecycle teardown <run-id>
 ```
 
-Or just ask. With `/sssf-sandbox-orchestrator` loaded, the same flow runs conversationally: "mount a sandbox and add a word-count badge," "spin up three and give me best-of-N," "harvest the winner." The skill picks the recipes; the typed `just` commands above stay the deterministic ground truth underneath.
+`doctor` runs five checks: ssh exe.dev reachable, the run-record helper runs, the provisioner is present, the active roster's provider keys are set, and the adw layer resolves.
 
-Two handles, do not confuse them: **`<run-id>`** names the sandbox (it is also the VM name and the public hostname), while **`<adw_id>`** names one factory run inside that box. `just sbx manage list` counts sandboxes; `just obs sessions` counts the runs within them. A single box can host many ADW runs.
+### 1. Set up a new app
 
-`just sbx mount` stops at `observe` on purpose: nothing chains into teardown, because a destroyed VM is the evidence and the artifacts, gone. Harvest is the exception you can run freely, because it only reads the box and only writes `refs/sandbox/`.
+Make your app repo public, and put a `sssf.app.yaml` at its root (the schema is in [The app contract](#the-app-contract); [`hello-server`](https://github.com/yhuangsh/hello-server.git) is the worked example). Then give the factory one roster naming it:
+
+```bash
+# start from the shipped hello-server example and edit the `app:` block
+cp adws/adw_sssf_config/sssf.hello.config.yaml adws/adw_sssf_config/sssf.myapp.config.yaml
+
+# in sssf.myapp.config.yaml set:
+#   app:
+#     repo: https://github.com/<you>/<your-app>.git
+#     ref: main
+#     path: target
+#     manifest: sssf.app.yaml
+
+# in .env, point the factory at your roster
+echo 'SSSF_CONFIG=adws/adw_sssf_config/sssf.myapp.config.yaml' >> .env
+
+just sbx manage doctor            # re-check: now validates YOUR roster's provider keys
+```
+
+### 2. Mount
+
+```bash
+just sbx mount my-run             # create -> fill -> setup -> observe (~10s), prints the run id and URLs
+```
+
+`mount` chains four of the six phases and stops at `observe` on purpose — teardown is never chained. FILL clones your app to `~/app/target` and creates the run branch `sbx/my-run` on it; SETUP provisions and then runs the five-assertion health gate:
+
+- **A** git integrity — factory HEAD + target HEAD match the run record, factory tree clean
+- **B** pi is current (== registry latest) and `--list-models` is non-empty
+- **C** a roster ping answers through the sandbox's own pi
+- **D** a live call reports non-zero cost
+- **E** every roster provider has its env key
+
+OBSERVE starts your app on the manifest's `serve.port` (**4501** for hello-server — the one anonymously exposed port) and the trace UI on **4600**, auth-gated to exe.dev users with VM access, then prints both URLs.
+
+### 3. Develop
+
+Put work in, watch it, bring it home, tear it down:
+
+```bash
+# run the factory INSIDE the sandbox — detached, records a PID, zero orchestration tokens
+just sbx lifecycle execute my-run "add a /health endpoint"                  # default chain: sdlc
+just sbx lifecycle execute my-run "add a /health endpoint" "" simple-sdlc   # pick a chain (arg 4)
+
+# or hand off to the in-sandbox pi orchestrator and keep talking to it
+just sbx run agent my-run "If you have not already: READ and EXECUTE .claude/skills/sssf/SKILL.md. Then: <work>"
+
+# inspect synchronously — logs, git state, anything
+just sbx run cmd my-run 'tail -f run.log'
+
+# watch from outside
+just obs sessions                 # the ADW runs inside your boxes
+just obs tail <adw_id>            # live event stream for one factory run
+
+# bring the run's commits home (safe, non-destructive, run any time)
+just sbx manage harvest my-run    # -> .sandbox/repos/myapp.git refs/sandbox/my-run
+git -C .sandbox/repos/myapp.git log --oneline --graph <base>..refs/sandbox/my-run
+
+# tear it down (always an explicit human decision)
+just sbx lifecycle teardown my-run
+```
+
+**`just sbx lifecycle execute` takes the prompt as the second argument and the ADW chain as the fourth** (`RUN_ID PROMPT CONFIG ADW`); `CONFIG` is the roster for a fan-out arm and defaults to the roster FILL shipped. Harvest never merges: it writes only `refs/sandbox/<run-id>` in the app repo's bare cache and never touches any branch you own.
+
+Two handles, do not confuse them: **`<run-id>`** names the sandbox (it is also the VM name and the public hostname) and is what `just sbx ...` takes, while **`<adw_id>`** names one factory run inside that box and is what `just obs ...` takes. `just sbx manage list` counts sandboxes; `just obs sessions` counts the runs within them. A single box can host many ADW runs.
+
+### 4. How it works
+
+Four ideas carry the whole system:
+
+- **Six phases, one run record.** create → fill → setup → execute → observe → teardown. Each is a standalone recipe; the run record on disk is the only state they share, so any phase can crash and teardown still has a handle. `mount` stops at observe; teardown is always explicit.
+- **Agents plus code — agent proposes, code disposes.** Agents plan, build, review, and document; deterministic Python owns the sequencing, the test command, and the commits. A phase's claim is only true once a gate accepts it.
+- **Envelopes and gates.** Typed envelopes carry context between phases; a gate validates every claim, and a failure re-enters the same session as a correction, never a restart.
+- **One trace db.** Every phase, tool call, complete thought, and complete response streams into `adws/adw_data/sssf.db` (WAL, so reads never block writers). The visualizer on :4600 polls it.
 
 ---
 
@@ -225,15 +311,16 @@ You watch from outside; you never reach in. Every phase, tool call, complete tho
 That trace is also the answer for the read-only audience: you do not have to run anything to understand the system, because every run it ever did is recorded. Query `adws/adw_data/sssf.db` directly, or boot the UI.
 
 <p align="center">
-  <img src="images/18_two_ports.png" alt="One sandbox, two ports: the app on a public port, the agent view auth-gated on a private one" width="750">
+  <img src="images/18_two_ports.png" alt="One sandbox, two ports: your app on a public port, the agent view auth-gated on a private one" width="750">
 </p>
 
-Each sandbox exposes two ports: the app is public, the agent view stays auth-gated to you. Ship the app; keep the factory floor private.
+Each sandbox exposes two ports: your app is public, the agent view stays auth-gated to you. Ship the app; keep the factory floor private.
 
 ```bash
-just obs ui                 # boot the observability UI
+just obs ui                 # boot the observability UI (server :4600 + vite dev)
 just obs sessions           # recent runs
 just obs tail <adw_id>      # live event tail
+just obs rosters            # which rosters exist and who is in them
 just sbx manage list        # every sandbox: state, VM alive
 ```
 
@@ -241,25 +328,24 @@ just sbx manage list        # every sandbox: state, VM alive
 
 ## The command surface
 
-Five namespaces, and the namespace answers *where the work happens*:
+The namespaces answer *where the work happens*:
 
 ```
 justfile
-├── inkwell     boot and test the app itself: run / dev / test
-├── adw         the workflows: sdlc, build-test, scout, simple-sdlc … (runs IN a sandbox)
-├── sbx         sandbox orchestration: mount, lifecycle, run, manage, orch (host-only)
-├── obs         read the trace: sessions, phases, tail, procs, ui
-└── local       boot an orchestrator agent on THIS machine: cc / pi / ipi
+├── adw      the workflows: sdlc, simple-sdlc, build-test, scout … (runs IN a sandbox)
+├── sbx      sandbox orchestration: mount, lifecycle, run, manage, orch (host-only)
+├── obs      read the trace: sessions, phases, tail, procs, rosters, ui
+└── local    boot an orchestrator agent on THIS machine: cc / pi / ipi
 ```
 
 ```bash
-just sbx mount my-feature                                  # blank VM → running factory, ~10s
-just sbx run cmd <id> 'tail -f run.log'                    # look inside, synchronously
-just sbx manage harvest <id>                               # commits home → refs/sandbox/<id>
-just sbx lifecycle teardown <id>                           # human decision, always
+just sbx mount my-run                                      # blank VM → running factory, ~10s
+just sbx run cmd my-run 'tail -f run.log'                  # look inside, synchronously
+just sbx manage harvest my-run                             # commits home → refs/sandbox/my-run
+just sbx lifecycle teardown my-run                         # human decision, always
 ```
 
-`TREE.md` is the file-by-file map of the whole repo, grouped by tier, if you want the full territory.
+`TREE.md` is the file-by-file map of the whole repo, grouped by layer, if you want the full territory.
 
 ---
 

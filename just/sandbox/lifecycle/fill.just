@@ -22,7 +22,10 @@ fill RUN_ID *SHA:
     RR="sandbox_mount/host/run_record.py"
 
     # Public repo: no auth, no GitHub integration, no exe.dev git integration.
-    REPO="https://github.com/disler/inkwell-agent-sandboxes-and-software-factory.git"
+    # Source is the engineer's PUBLIC FORK (not upstream disler): it is the one
+    # that carries the fix commits, so a fresh VM provisions itself with no
+    # push access from the host.
+    REPO="https://github.com/yhuangsh/inkwell-agent-sandboxes-and-software-factory.git"
 
     # *SHA is variadic: it interpolates to "" when unpinned, space-joined otherwise.
     # Only the first token is meaningful; extra words are a caller mistake we ignore.

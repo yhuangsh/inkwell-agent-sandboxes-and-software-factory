@@ -146,24 +146,135 @@ command -v pi >/dev/null 2>&1 || { echo "[provision] pi not on PATH after instal
 }
 say "pi $(pi --version) (registry latest)"
 
-# ── 5. bun install ───────────────────────────────────────────────────────────
-step "5/9 bun install"
-for dir in apps/inkwell .claude/skills/sssf/apps/visualizer; do
-  if [[ -f "$dir/package.json" ]]; then
-    ( cd "$dir" && bun install )
-    say "installed ${dir}"
-  else
-    say "skipped ${dir} (no package.json)"
-  fi
-done
+# ── 5. app (generic, manifest-driven) ────────────────────────────────────────
+# The app is whatever the shipped roster's `app:` block names, and its needs are
+# declared in its own sssf.app.yaml — never hardcoded here. ONE parser: a uv-run
+# PEP-723 probe (pyyaml already a tracer dependency) resolves app.path and
+# app.manifest from /home/exedev/sssf_config.yaml into shell-quoted assignments.
+# A runtime we cannot provide fails fast BY NAME; it is NEVER an excuse for apt.
+step "5/9 app"
+APP_PROBE="$(mktemp -t sssf_app_probe.XXXXXX.py)"
+cat > "$APP_PROBE" <<'PY'
+# /// script
+# dependencies = ["pyyaml"]
+# ///
+"""Resolve app.path/app.manifest + the manifest's install/build into shell vars."""
 
-# ── 6. build the visualizer UI ───────────────────────────────────────────────
-# Without dist/ the server still boots but only answers the JSON API — the page
-# itself 404s. `bunx vite build` rather than `bun run build`, which also runs
-# vue-tsc; type errors must not be able to fail a mount.
-step "6/9 visualizer build"
+import shlex
+import sys
+from pathlib import Path
+
+import yaml
+
+repo_root = Path(sys.argv[1])
+try:
+    cfg = yaml.safe_load(Path("/home/exedev/sssf_config.yaml").read_text()) or {}
+except FileNotFoundError:
+    cfg = {}
+app = cfg.get("app") or {}
+path = app.get("path") or "apps/inkwell"
+manifest = app.get("manifest") or "sssf.app.yaml"
+manifest_path = repo_root / path / manifest
+present = manifest_path.is_file()
+data = (yaml.safe_load(manifest_path.read_text()) or {}) if present else {}
+install = [str(c) for c in (data.get("install") or [])]
+build = [str(c) for c in (data.get("build") or [])]
+
+
+def emit(key, value):
+    print(f"{key}={shlex.quote(str(value))}")
+
+
+emit("APP_PATH", path)
+emit("APP_MANIFEST", manifest)
+emit("APP_MANIFEST_PRESENT", 1 if present else 0)
+emit("APP_RUNTIME", data.get("runtime") or "")
+emit("APP_INSTALL_COUNT", len(install))
+for i, cmd in enumerate(install):
+    emit(f"APP_INSTALL_{i}", cmd)
+emit("APP_BUILD_COUNT", len(build))
+for i, cmd in enumerate(build):
+    emit(f"APP_BUILD_{i}", cmd)
+PY
+# The probe's own uv resolve goes to stderr; stdout is exactly the assignments.
+# Capture first (so a failing probe fails under set -e) and eval the quoted lines.
+APP_ENV="$(uv run "$APP_PROBE" "$REPO_ROOT")"
+rm -f "$APP_PROBE"
+eval "$APP_ENV"
+
+APP_DIR="$REPO_ROOT/$APP_PATH"
+if [[ ! -d "$APP_DIR" ]]; then
+  echo "[provision] app.path '$APP_PATH' does not exist under $REPO_ROOT" >&2
+  exit 1
+fi
+say "app      $APP_PATH"
+if [[ "$APP_MANIFEST_PRESENT" == 1 ]]; then
+  say "manifest $APP_MANIFEST"
+else
+  say "manifest $APP_MANIFEST absent — package.json fallback"
+fi
+
+# Runtime: only toolchains the image / steps 2-4 already provide. A declared
+# runtime we cannot honour is a named failure, never an apt install.
+if [[ -n "${APP_RUNTIME:-}" && "$APP_RUNTIME" != "none" ]]; then
+  case "$APP_RUNTIME" in
+    bun|node|uv) ;;
+    *) echo "[provision] manifest declares runtime '$APP_RUNTIME' — not provided by this image (no apt fallback)" >&2; exit 1 ;;
+  esac
+  if ! command -v "$APP_RUNTIME" >/dev/null 2>&1; then
+    echo "[provision] manifest declares runtime '$APP_RUNTIME' but it is not on PATH" >&2
+    exit 1
+  fi
+  say "runtime  $APP_RUNTIME"
+fi
+
+# Each declared command runs in a subshell from the app dir; STEP names the stage
+# so the ERR trap reports it. Absent key = skip with a say line, never a failure.
+run_app_stage() {
+  local kind="$1" count="$2" i var cmd
+  for ((i = 0; i < count; i++)); do
+    var="APP_${kind}_${i}"
+    cmd="${!var}"
+    say "${kind,,}: $cmd"
+    STEP="app ${kind,,}: ${cmd}"
+    ( cd "$APP_DIR" && bash -c "$cmd" )
+  done
+}
+
+if [[ "$APP_MANIFEST_PRESENT" == 1 ]]; then
+  if [[ "${APP_INSTALL_COUNT:-0}" -gt 0 ]]; then
+    run_app_stage INSTALL "$APP_INSTALL_COUNT"
+  else
+    say "install: skipped (no install: in manifest)"
+  fi
+  if [[ "${APP_BUILD_COUNT:-0}" -gt 0 ]]; then
+    run_app_stage BUILD "$APP_BUILD_COUNT"
+  else
+    say "build: skipped (no build: in manifest)"
+  fi
+elif [[ -f "$APP_DIR/package.json" ]]; then
+  say "no manifest — package.json fallback: bun install"
+  STEP="app fallback: bun install"
+  ( cd "$APP_DIR" && bun install )
+else
+  say "skipped $APP_PATH (no manifest, no package.json)"
+fi
+
+# ── 6. build the visualizer UI (factory runtime) ─────────────────────────────
+# The visualizer is factory machinery, not app payload, so its install lives
+# here rather than in the app step. Without dist/ the server still boots but only
+# answers the JSON API — the page itself 404s. `bunx vite build` rather than
+# `bun run build`, which also runs vue-tsc; type errors must not be able to fail
+# a mount.
+step "6/9 visualizer"
 VIZ=".claude/skills/sssf/apps/visualizer"
 if [[ -d "$VIZ" ]]; then
+  if [[ -f "$VIZ/package.json" ]]; then
+    ( cd "$VIZ" && bun install )
+    say "installed ${VIZ}"
+  else
+    say "skipped ${VIZ} (no package.json)"
+  fi
   ( cd "$VIZ" && bunx vite build )
   say "dist/ built"
 else

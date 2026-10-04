@@ -1,9 +1,11 @@
-"""Deterministic lint, typecheck, and build blocks for the Inkwell app.
+"""Deterministic quality checks, driven by the app's `sssf.app.yaml` manifest.
 
-The app intentionally has no local package toolchain. Linting uses a pinned
-Oxlint release through Bun; "typecheck" is the strongest zero-config Bun-native
-syntax/import/transpilation check available for the current JS/TS sources.
-Build blocks add minification and keep all outputs inside the ADW session.
+The check set is DATA, not code: each app declares its own commands and the
+factory runs them. This module owns the mechanics — where an artifact lands, how
+a failure is packed for the builder — and takes the naming, area, operation,
+argv, and timeout from the manifest. For the vendored inkwell app the outcome is
+identical to the old hardcoded blocks: the same commands against the same files,
+the same six non-test checks in `run_inkwell_quality` plus the `tests` block.
 """
 
 from __future__ import annotations
@@ -13,13 +15,12 @@ import shlex
 import subprocess
 import time
 from pathlib import Path
-from typing import Callable
+
+import yaml
 
 from .data_types import (EventRecord, QualityCheckResult, QualityCheckSpec, QualityResult,
                          VerifyOutput)
 from .utils import now_iso, operator_env
-
-OXLINT_VERSION = "1.36.0"
 
 # How much of a failing command's output rides back inside the envelope. Enough
 # for a builder to act on without opening the artifact; bounded so a runaway
@@ -38,15 +39,67 @@ TAIL_CHARS = 4_000
 # exit 127 with the real error text.
 BUN = os.environ.get("BUN_PATH", "").strip() or "bun"
 
+# Phase 0 compat defaults, mirroring AppConfig in data_types.py. Used when a run
+# predates the `app:` block.
+DEFAULT_APP_PATH = "apps/inkwell"
+DEFAULT_APP_MANIFEST = "sssf.app.yaml"
+
 
 def _check_dir(run, name: str) -> Path:
     seq = run.phases[-1].seq if run.phases else 0
-    path = run.context_handoff_dir / "quality" / f"{seq:02d}_{name}"
+    # Anchor at the repo root. Manifest checks run with cwd = the app dir, so a
+    # relative artifact path (or a relative `{outdir}` handed to a build) would
+    # resolve THERE and pollute the app tree — gate A would then see it.
+    root = run.context_handoff_dir
+    if not root.is_absolute():
+        root = run.repo_root / root
+    path = root / "quality" / f"{seq:02d}_{name}"
     path.mkdir(parents=True, exist_ok=True)
     return path
 
 
-def _run(spec: QualityCheckSpec, run) -> QualityCheckResult:
+def _app_dir(run) -> Path:
+    """Where the app under test lives: the roster's `app.path` under repo root."""
+    app = getattr(run.cfg, "app", None)
+    path = getattr(app, "path", None) or DEFAULT_APP_PATH
+    return run.repo_root / path
+
+
+def _load_checks(run) -> list[QualityCheckSpec]:
+    """Resolve the manifest's `checks:` into ready-to-run specs.
+
+    argv paths are relative to the app dir (checks run with cwd = the app dir).
+    The literal `{outdir}` token is replaced with that check's absolute artifact
+    bundle dir, so builds write outside the app tree and gate A stays clean. A
+    manifest that is absent or declares no checks yields no checks: the SDLC
+    still runs, it just skips the deterministic quality phase.
+    """
+    app = getattr(run.cfg, "app", None)
+    manifest_name = getattr(app, "manifest", None) or DEFAULT_APP_MANIFEST
+    manifest_path = _app_dir(run) / manifest_name
+    if not manifest_path.is_file():
+        return []
+    manifest = yaml.safe_load(manifest_path.read_text()) or {}
+    specs: list[QualityCheckSpec] = []
+    for entry in manifest.get("checks") or []:
+        name = entry["name"]
+        outdir = str(_check_dir(run, name) / "bundle")
+        argv = [str(arg).replace("{outdir}", outdir) for arg in entry["argv"]]
+        # Preserve the BUN escape hatch: a manifest names `bun`, the module
+        # resolves it (BUN_PATH wins) exactly as the old hardcoded blocks did.
+        if argv and argv[0] == "bun":
+            argv[0] = BUN
+        specs.append(QualityCheckSpec(
+            name=name,
+            area=entry.get("area", "backend"),
+            operation=entry.get("operation", "build"),
+            argv=argv,
+            timeout_seconds=entry.get("timeout_seconds", 120),
+        ))
+    return specs
+
+
+def _run(spec: QualityCheckSpec, run, cwd: Path | None = None) -> QualityCheckResult:
     phase = run.phases[-1]
     output_dir = _check_dir(run, spec.name)
     output_artifact = output_dir / "command.log"
@@ -61,7 +114,7 @@ def _run(spec: QualityCheckSpec, run) -> QualityCheckResult:
     try:
         completed = subprocess.run(
             spec.argv,
-            cwd=run.repo_root,
+            cwd=cwd or run.repo_root,   # app dir for manifest checks; repo root otherwise
             env=env,
             capture_output=True,
             text=True,
@@ -117,92 +170,57 @@ def _run(spec: QualityCheckSpec, run) -> QualityCheckResult:
     )
 
 
-def frontend_lint(run) -> QualityCheckResult:
-    return _run(QualityCheckSpec(
-        name="frontend_lint",
-        area="frontend",
-        operation="lint",
-        argv=[BUN, "x", f"oxlint@{OXLINT_VERSION}", "apps/inkwell/public/app.js"],
-    ), run)
+def _run_checks(run, checks: list[QualityCheckSpec]) -> QualityResult:
+    """Run the given specs from the app dir and collect ALL failures.
 
-
-def backend_lint(run) -> QualityCheckResult:
-    return _run(QualityCheckSpec(
-        name="backend_lint",
-        area="backend",
-        operation="lint",
-        argv=[BUN, "x", f"oxlint@{OXLINT_VERSION}", "apps/inkwell/server.ts"],
-    ), run)
-
-
-def frontend_typecheck(run) -> QualityCheckResult:
-    output_dir = _check_dir(run, "frontend_typecheck") / "bundle"
-    return _run(QualityCheckSpec(
-        name="frontend_typecheck",
-        area="frontend",
-        operation="typecheck",
-        argv=[BUN, "build", "--target=browser", "apps/inkwell/public/app.js",
-              "--outdir", str(output_dir)],
-    ), run)
-
-
-def backend_typecheck(run) -> QualityCheckResult:
-    output_dir = _check_dir(run, "backend_typecheck") / "bundle"
-    return _run(QualityCheckSpec(
-        name="backend_typecheck",
-        area="backend",
-        operation="typecheck",
-        argv=[BUN, "build", "--target=bun", "apps/inkwell/server.ts",
-              "--outdir", str(output_dir)],
-    ), run)
-
-
-def frontend_build(run) -> QualityCheckResult:
-    output_dir = _check_dir(run, "frontend_build") / "bundle"
-    return _run(QualityCheckSpec(
-        name="frontend_build",
-        area="frontend",
-        operation="build",
-        argv=[BUN, "build", "--target=browser", "--minify",
-              "apps/inkwell/public/app.js", "--outdir", str(output_dir)],
-    ), run)
-
-
-def backend_build(run) -> QualityCheckResult:
-    output_dir = _check_dir(run, "backend_build") / "bundle"
-    return _run(QualityCheckSpec(
-        name="backend_build",
-        area="backend",
-        operation="build",
-        argv=[BUN, "build", "--target=bun", "--minify",
-              "apps/inkwell/server.ts", "--outdir", str(output_dir)],
-    ), run)
-
-
-def tests(run) -> QualityCheckResult:
-    """Run the Inkwell suite. A known command — code, not an agent.
-
-    The command is written down once here because it is not a judgement call.
-    An agent rediscovering `bun test` on every run cost ~1M tokens and 85s; this
-    costs nothing and takes milliseconds.
+    Ordering contract for the caller: a failing block does NOT fail the phase.
+    The runner did its job; the CODE is what failed. Hand this result to the
+    builder and let the bounded repair loop decide the run's fate.
     """
-    return _run(QualityCheckSpec(
-        name="tests",
-        area="backend",
-        operation="build",           # the enum has no "test"; the name carries it
-        argv=[BUN, "test", "apps/inkwell/server.test.ts"],
-        timeout_seconds=600,
-    ), run)
+    cwd = _app_dir(run)
+    results = [_run(spec, run, cwd=cwd) for spec in checks]
+    # A failure is the command, its exit code, and what it actually printed —
+    # everything a builder needs to repair without opening a log or being told
+    # what the error "means" by a parser that guessed.
+    failures = [
+        f"{check.name}: `{check.command}` exited {check.returncode}\n{check.output_tail}".rstrip()
+        for check in results if not check.passed
+    ]
+    return QualityResult(
+        passed=not failures,
+        checks=results,
+        failures=failures,
+        artifacts=[check.output_artifact for check in results],
+    )
+
+
+def run_quality(run) -> QualityResult:
+    """Run EVERY check the app declares, the test block included.
+
+    This is the manifest-driven successor to the hardcoded block list: the app's
+    `checks:` map is the whole specification. A manifest with no checks yields an
+    empty, passing result (a logged note, not a failure) so the SDLC still runs
+    plan/build/review.
+    """
+    checks = _load_checks(run)
+    if not checks:
+        run.console.note("quality: app manifest declares no checks — nothing to run")
+    return _run_checks(run, checks)
+
+
+def run_inkwell_quality(run) -> QualityResult:
+    """Inkwell's six non-test blocks, for callers that predate the manifest.
+
+    Behavior-identical to the old hardcoded list: for inkwell's manifest this is
+    exactly frontend/backend lint, typecheck, and build.
+    """
+    return _run_checks(run, [c for c in _load_checks(run) if c.name != "tests"])
 
 
 def run_inkwell_tests(run) -> QualityResult:
-    """The test suite as a QualityResult, so it reports like every other block."""
-    check = tests(run)
-    failures = ([] if check.passed else
-                [f"{check.name}: `{check.command}` exited {check.returncode}\n"
-                 f"{check.output_tail}".rstrip()])
-    return QualityResult(passed=check.passed, checks=[check], failures=failures,
-                         artifacts=[check.output_artifact])
+    """The manifest's `tests` block as a single-check QualityResult, so it reports
+    like every other block. Kept for the callers that run tests as their own phase."""
+    return _run_checks(run, [c for c in _load_checks(run) if c.name == "tests"])
 
 
 def as_envelope(result: QualityResult, what: str) -> VerifyOutput:
@@ -217,30 +235,4 @@ def as_envelope(result: QualityResult, what: str) -> VerifyOutput:
                               "command — trust it over any summary."),
         passed=result.passed,
         failures=result.failures,
-    )
-
-
-def run_inkwell_quality(run) -> QualityResult:
-    """Run every frontend/backend quality block and collect all failures."""
-    blocks: list[Callable] = [
-        frontend_lint,
-        backend_lint,
-        frontend_typecheck,
-        backend_typecheck,
-        frontend_build,
-        backend_build,
-    ]
-    checks = [block(run) for block in blocks]
-    # A failure is the command, its exit code, and what it actually printed —
-    # everything a builder needs to repair without opening a log or being told
-    # what the error "means" by a parser that guessed.
-    failures = [
-        f"{check.name}: `{check.command}` exited {check.returncode}\n{check.output_tail}".rstrip()
-        for check in checks if not check.passed
-    ]
-    return QualityResult(
-        passed=not failures,
-        checks=checks,
-        failures=failures,
-        artifacts=[check.output_artifact for check in checks],
     )

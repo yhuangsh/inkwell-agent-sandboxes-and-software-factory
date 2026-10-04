@@ -106,8 +106,17 @@ def _context_tokens(usage: dict) -> int:
 
 
 def context_window(provider: str, model_id: str) -> int:
-    """The model's context ceiling from pi's merged model catalog."""
-    registry = json.loads(Path(MODELS_JSON).read_text())
+    """The model's context ceiling from pi's merged model catalog.
+
+    `models.json` is an OPTIONAL local override: FILL removes it on a fresh box
+    (the mirror-free rosters rely on pi's built-in catalog), so its absence is
+    the normal case, not an error. A missing or malformed file falls through to
+    `_pi_catalog()`, which reads the same merged view straight from pi.
+    """
+    try:
+        registry = json.loads(Path(MODELS_JSON).read_text())
+    except (OSError, ValueError):
+        registry = {}
     for model in registry.get("providers", {}).get(provider, {}).get("models", []):
         if model.get("id") == model_id:
             return int(model.get("contextWindow") or 0)

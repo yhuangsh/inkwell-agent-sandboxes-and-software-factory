@@ -1,4 +1,7 @@
-# sssf.config.yaml — the factory's agent roster. One agent, one prompt, one purpose.
+# sssf.hello.config.yaml — the generality proof for the any-app factory (spec
+# 6159cbd5 phase 3): the de-vendored factory mounts a toy app with ONLY a new
+# roster + .env, zero factory code edits. Identical to sssf.config.yaml except
+# the app: block below.
 # v1 runs the Pi coding agent only; coding_agent: claude_code arrives in v2.
 defaults:
   coding_agent: pi
@@ -45,10 +48,11 @@ observability:
 # (Phase 0 compat). Phase 3 de-vendored: no app code lives in the factory clone
 # (inkwell's history is at https://github.com/yhuangsh/inkwell.git).
 app:
-  repo: https://github.com/yhuangsh/inkwell.git   # public, unauthenticated clone
-  ref: main
+  repo: https://github.com/yhuangsh/hello-server.git   # public, unauthenticated clone
+  ref: main                 # verified at 89b1ae17dbf7b0d48c9200cabc11333a26faf56d (git ls-remote)
   path: target
-  manifest: sssf.app.yaml
+  manifest: sssf.app.yaml   # carried by the app repo: bun runtime, install,
+                            # serve `bun run server.ts` on 4501, checks.test
 
 agents:
   - name: planner

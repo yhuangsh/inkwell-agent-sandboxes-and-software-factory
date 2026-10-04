@@ -24,10 +24,18 @@ def _git(*args: str, repo: Path | str | None = None) -> str:
 
 def payload_root(app_cfg, factory_root: Path) -> Path:
     """The repo ADW products commit to: the target clone when the roster's app
-    block names a repo (phase 2 target mode), else the factory repo itself
-    (vendored payload — byte-identical to the old behavior)."""
+    block names a repo AND the clone is checked out (phase 2 target mode, in
+    a VM), else the factory repo itself (vendored payload — byte-identical to
+    the old behavior).
+
+    Host-side runs of a target-mode roster have no clone at <factory>/<path>
+    (FILL creates it only inside the VM); their products belong to the factory,
+    so a missing or non-git target falls back to the factory root instead of
+    crashing the first git call with FileNotFoundError."""
     if app_cfg is not None and getattr(app_cfg, "repo", None):
-        return (Path(factory_root) / app_cfg.path).resolve()
+        target = (Path(factory_root) / app_cfg.path).resolve()
+        if target.is_dir() and is_repo(target):
+            return target
     return Path(factory_root).resolve()
 
 

@@ -1,10 +1,13 @@
-# sssf.meta.config.yaml — ONE-OFF deliberate authorization for factory self-modification.
-# Run 4c8321b5 proved the default boundary correct: a barred builder was caught and
-# stopped. But generalization phases 0-1 (spec 6159cbd5) legitimately require editing
-# the factory's own grader/config, so THIS roster names exactly those paths in the
-# builder's `writes:` — the escape hatch the config comment documents. Everything not
-# named stays barred. Use only for the spec-6159cbd5 phase 0-1 landing; delete or
-# narrow afterwards. NOT the default roster.
+# sssf.meta.config.yaml — ONE-OFF FULL UNLOCK for the phase-2 (target mode) landing.
+# Justification: phase 2 of spec 6159cbd5 touches factory machinery across layers —
+# sssf.config.yaml (app.repo/path), .gitignore, fill/setup/harvest justs, and possibly
+# adw_modules git plumbing (run branch + commits must move to the target clone). An
+# exhaustive per-path list was attempted and could not be known before the builder
+# digs in; instead this roster lifts protected_files for exactly THIS run, in writing,
+# and MUST be deleted (or re-narrowed) when phase 2 lands. History: the per-path
+# version of this roster authorized the phase 0-1 landing (d142f7cb); the agent_pi
+# models.json fix landed separately under sssf.meta2.config.yaml (77f0e46d). Any
+# git push to a remote by an agent remains OUT OF AUTHORIZATION — report, don't push.
 # v1 runs the Pi coding agent only; coding_agent: claude_code arrives in v2.
 defaults:
   coding_agent: pi
@@ -32,10 +35,12 @@ defaults:
   # the session runtime under data_dir — context_handoff/, envelopes, prompts,
   # raw output. Every agent can always write its own report; `writes: []` means
   # read-only with respect to the repo, not mute.
-  protected_files:
-    - adws/adw_modules/
-    - adws/adw_sssf_config/
-    - adws/adw_*.py
+  protected_files: []                # META: lifted for this one run — see header. The
+                                     # default is the three adws/ patterns below.
+  # protected_files:
+  #   - adws/adw_modules/
+  #   - adws/adw_sssf_config/
+  #   - adws/adw_*.py
   data_dir: adws/adw_data          # runtime home: {data_dir}/sessions/{adw_id}/{agent_name}/
 
 observability:
@@ -82,21 +87,10 @@ agents:
     prompt_engineering:
       system: adws/adw_data/prompt_engineering/builder/system.md
       user: adws/adw_data/prompt_engineering/builder/user.md
- # META-ONLY: `writes` names every path this landing may touch — the three factory-
-    # machinery files the spec requires, the run's other legitimate touchpoints, and
-    # this roster itself (so the authorization ships with the commit it enabled).
-    # agent_pi.py was deliberately EXCLUDED (unauthorized scope creep in 4c8321b5;
-    # diff preserved at /tmp/agent_pi_models_json_optional.patch).
-    writes:
-      - adws/adw_modules/quality.py
-      - adws/adw_modules/data_types.py
-      - adws/adw_sssf_config/sssf.config.yaml
-      - adws/adw_sssf_config/sssf.meta.config.yaml
-      - just/sandbox/lifecycle/fill.just
-      - just/sandbox/lifecycle/setup.just
-      - sandbox_mount/guest/provision.sh
-      - sandbox_mount/host/run_record.py
-      - apps/inkwell/sssf.app.yaml
+ # META: writes key REMOVED for this run — builder unrestricted (protected_files lift
+ # above is the deliberate part). Every prior restriction on tools stays.
+ # Per-path history (phase 0-1): quality.py, data_types.py, sssf.config.yaml,
+ # fill.just, setup.just, provision.sh, run_record.py, apps/inkwell/sssf.app.yaml.
     tools:                         # the only agent that mutates the repo — everything on
       - read
       - grep

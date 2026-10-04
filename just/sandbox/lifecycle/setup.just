@@ -5,10 +5,11 @@
 # `positional-arguments` is a hard error at parse time.
 #
 # What this phase does: stream the HOST checkout's provision.sh into the sandbox
-# over ssh stdin (never the stale copy inside the VM's clone — the clone comes
-# from a third-party public repo this machine cannot push to, and gate A forbids
-# writing into the tracked app/ tree, so host-streaming is the only path a local
-# provisioner fix can take), wait for its sentinel, then run the five-assertion
+# over ssh stdin (never the copy inside the VM's clone — the gates A–E below are
+# host-side, so the provisioner that runs must be the same version as the gate
+# that checks its work; origin is the engineer's fork and may lag the working
+# tree, so host-streaming is what keeps provisioner and gate in lockstep), wait
+# for its sentinel, then run the five-assertion
 # health gate. Nothing here creates or
 # destroys a VM. On failure it prints how to get into the box and exits
 # non-zero, because a gate that auto-destroys throws away the evidence.
@@ -84,15 +85,28 @@ setup RUN_ID CONFIG="":
     "${SSH[@]}" 'rm -f /tmp/PROVISION_READY' < /dev/null \
       || gate_fail "cannot reach ${HOST} over ssh"
     # Stream the HOST working-tree provision.sh over ssh stdin and run it with
-    # `bash -s`, instead of the stale copy inside the VM's clone. The clone is a
-    # third-party public repo this machine cannot push to and gate A forbids
-    # writing into the tracked app/ tree, so host-streaming is the only path a
-    # local provisioner fix can reach the box. PROVISION_REPO_ROOT stays inside
-    # the single quotes so $HOME expands on the VM (the clone lives at ~/app);
-    # the file redirect replaces the old < /dev/null, which would swallow the
-    # script now that the script itself arrives on stdin. Output streams live.
+    # `bash -s`, instead of the copy inside the VM's clone. The gates A–E below
+    # are host-side, so the provisioner that runs must be the same version as
+    # the gate that checks its work; origin is the engineer's fork and may lag
+    # the working tree, so host-streaming is what keeps provisioner and gate in
+    # lockstep. PROVISION_REPO_ROOT stays inside the single quotes so $HOME
+    # expands on the VM (the clone lives at ~/app); the file redirect replaces
+    # the old < /dev/null, which would swallow the script now that the script
+    # itself arrives on stdin. Output streams live.
     "${SSH[@]}" 'PROVISION_REPO_ROOT="$HOME/app" bash -s' < sandbox_mount/guest/provision.sh \
       || gate_fail "provision.sh exited non-zero (its last '── step ──' line names the stage)"
+
+    # Provisioner/gate coherence, made visible. The host copy is authoritative —
+    # it is what just ran, and gates A–E are host-side — so this comparison only
+    # surfaces that the clone (and therefore origin) may lag the working tree.
+    # Deliberately OUTSIDE the gate: skew is informational, never a failure, so
+    # it prints and continues and never touches gate_fail or the exit status.
+    HOST_PROV_SHA=$(sha256sum sandbox_mount/guest/provision.sh | awk '{print $1}')
+    CLONE_PROV_SHA=$("${SSH[@]}" 'sha256sum app/sandbox_mount/guest/provision.sh' < /dev/null 2>/dev/null \
+      | awk '{print $1}' || true)
+    if [ -n "$CLONE_PROV_SHA" ] && [ "$CLONE_PROV_SHA" != "$HOST_PROV_SHA" ]; then
+      echo "[setup] WARN: host provisioner ${HOST_PROV_SHA:0:8} differs from the clone copy ${CLONE_PROV_SHA:0:8} — origin may lag the host"
+    fi
 
     # ── 2. sentinel ──────────────────────────────────────────────────────────
     # provision.sh touches /tmp/PROVISION_READY as its literal last line, so on

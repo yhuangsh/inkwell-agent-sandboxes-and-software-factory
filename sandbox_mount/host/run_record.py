@@ -46,6 +46,7 @@ FIELDS = (
     "https_url",
     "session_id",
     "commit_sha",
+    "factory_sha",
     "ports",
     "pid",
     "created_at",

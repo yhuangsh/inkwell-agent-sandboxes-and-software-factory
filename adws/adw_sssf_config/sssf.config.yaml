@@ -36,6 +36,15 @@ observability:
   db: adws/adw_data/sssf.db        # tracer writes here directly; the UI polls it
   poll_ms: 500                     # visualizer live-poll cadence
 
+# The per-app input. FILL ships this file verbatim to the VM; provision.sh reads
+# `path`/`manifest` to provision the app, and quality.py reads the manifest's
+# `checks:`. Phase 0 compat: no `repo` means the payload is vendored in the
+# factory clone at `apps/inkwell` — today's layout. Phase 2 introduces a separate
+# target clone via `repo:`/`ref:`.
+app:
+  path: apps/inkwell
+  manifest: sssf.app.yaml
+
 agents:
   - name: planner
     model: kimi-coding/k3

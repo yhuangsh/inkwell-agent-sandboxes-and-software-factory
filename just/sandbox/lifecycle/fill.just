@@ -135,6 +135,10 @@ fill RUN_ID *SHA:
     # commit_sha is what makes N runs comparable, so record the sha that is actually
     # checked out, never the one that was asked for.
     "$RR" set {{RUN_ID}} commit_sha="$HEAD_SHA"
+    # factory_sha is the factory clone's own HEAD. Phase 0: factory and payload are
+    # one clone, so it equals commit_sha by construction. Phase 2 splits them —
+    # commit_sha then tracks the target clone and this one keeps the toolbelt sha.
+    "$RR" set {{RUN_ID}} factory_sha="$HEAD_SHA"
 
     # ── ship the roster + a derived settings.json ────────────────────────────
     # No host pi state is mirrored any more: every provider the rosters name is a

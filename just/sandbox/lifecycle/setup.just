@@ -37,6 +37,8 @@ setup RUN_ID CONFIG="":
     RR="sandbox_mount/host/run_record.py"
     VM=$("$RR" get {{RUN_ID}} vm_name)
     SHA=$("$RR" get {{RUN_ID}} commit_sha)
+    # factory_sha is empty on records that predate the field; gate A tolerates that.
+    FACTORY_SHA=$("$RR" get {{RUN_ID}} factory_sha)
 
     # run_record prints an empty line for an unset field, so emptiness is the
     # real check — a missing vm_name means CREATE never finished.
@@ -119,10 +121,11 @@ setup RUN_ID CONFIG="":
     # clones the repo and provisions around it, so any porcelain line at all
     # means something wrote where it should not have.
     echo "[gate] A git integrity"
-    if "${SSH[@]}" 'bash -s' "$SHA" <<'REMOTE_A'; then
+    if "${SSH[@]}" 'bash -s' "$SHA" "$FACTORY_SHA" <<'REMOTE_A'; then
     set -uo pipefail
     cd "$HOME/app" || { echo "   no ~/app on this VM — FILL never ran"; exit 1; }
     want="${1:-}"
+    factory="${2:-}"
     head="$(git rev-parse HEAD)" || { echo "   git rev-parse failed — .git is damaged"; exit 1; }
     echo "   HEAD     ${head}"
     echo "   expected ${want}"
@@ -130,6 +133,17 @@ setup RUN_ID CONFIG="":
       "$want"*) ;;
       *) echo "   HEAD does not match the recorded commit_sha"; exit 1 ;;
     esac
+
+    # factory_sha is the factory clone's own HEAD. Phase 0: one clone, so it is
+    # the same sha as commit_sha. A record predating the field reads empty — skip
+    # the assertion rather than fail a legitimate older run. Never destroys the VM.
+    if [ -n "$factory" ]; then
+      case "$head" in
+        "$factory"*) ;;
+        *) echo "   HEAD does not match the recorded factory_sha"; exit 1 ;;
+      esac
+      echo "   factory  ${factory} (matches HEAD)"
+    fi
 
     porcelain="$(git status --porcelain)"
     if [ -n "$porcelain" ]; then

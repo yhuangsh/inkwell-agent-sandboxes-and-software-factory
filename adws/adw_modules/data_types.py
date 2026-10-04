@@ -343,10 +343,26 @@ class ObservabilityConfig(BaseModel):
     poll_ms: int = 500
 
 
+class AppConfig(BaseModel):
+    """The per-app target: where its code lives and where its manifest lives.
+
+    Phase 0 compat: with no `repo`, the payload is vendored inside the factory
+    clone at `path` (today's layout: apps/inkwell). Phase 2 adds a separate
+    target clone via `repo`/`ref`; this block is the one place the app's location
+    is declared, so every reader resolves it here rather than hardcoding a path.
+    """
+
+    repo: Optional[str] = None          # None = payload vendored in the factory clone
+    ref: Optional[str] = None           # branch/tag/sha for repo; default remote HEAD
+    path: str = "apps/inkwell"          # mount point inside the factory clone
+    manifest: str = "sssf.app.yaml"     # relative to <path>
+
+
 class SSSFConfig(BaseModel):
     defaults: ConfigDefaults = Field(default_factory=ConfigDefaults)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
     agents: list[AgentConfig] = Field(default_factory=list)
+    app: AppConfig = Field(default_factory=AppConfig)
 
 
 # ── Tracing ──────────────────────────────────────────────────────────────────

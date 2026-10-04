@@ -1,8 +1,18 @@
 #!/usr/bin/env bash
 # provision.sh — turn a freshly cloned repo on a blank exeuntu VM into a
-# running software factory. Runs INSIDE the sandbox:
+# running software factory. Two supported invocation forms, both INSIDE the
+# sandbox:
 #
-#   ssh <vm> 'bash app/sandbox_mount/guest/provision.sh'
+#   ssh <vm> 'bash app/sandbox_mount/guest/provision.sh'               # in-clone
+#   ssh <vm> 'PROVISION_REPO_ROOT="$HOME/app" bash -s' < provision.sh  # host-piped
+#
+# The host-piped form exists because the VM clones a THIRD-PARTY read-only repo:
+# a provisioner fix committed locally could never reach the box through the clone
+# (this machine has no push access to it), and gate A forbids writing the script
+# into the tracked app/ tree. setup.just therefore streams this file from the HOST
+# checkout over ssh stdin; the provisioner that runs is whatever the host working
+# tree has, which is intentional. PROVISION_REPO_ROOT tells the piped script where
+# the cloned repo lives, since BASH_SOURCE is meaningless under `bash -s`.
 #
 # Idempotent by construction: every install is skip-if-present and the tracer's
 # DDL is CREATE TABLE IF NOT EXISTS. Re-running is cheap and safe.
@@ -19,11 +29,15 @@ step() { STEP="$1"; echo ""; echo "── $1 ───────────�
 say()  { echo "   $*"; }
 
 # ── 1. locate the repo ───────────────────────────────────────────────────────
-# Derived from this script's own path, never hardcoded to /home/exedev/app: the
-# clone target is the host's choice and this file is the only thing that knows
-# where it actually landed.
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+# REPO_ROOT comes from PROVISION_REPO_ROOT when set (setup.just pipes this script
+# to the VM over ssh stdin, where BASH_SOURCE is meaningless), else from this
+# script's own path, never hardcoded to /home/exedev/app.
+if [[ -n "${PROVISION_REPO_ROOT:-}" ]]; then
+  REPO_ROOT="$PROVISION_REPO_ROOT"
+else
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+fi
 cd "$REPO_ROOT"
 
 step "1/9 repo root"

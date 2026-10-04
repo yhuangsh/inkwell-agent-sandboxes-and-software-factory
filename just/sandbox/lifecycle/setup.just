@@ -4,8 +4,12 @@
 # and settings. No `set` lines here on purpose: duplicating `dotenv-load` or
 # `positional-arguments` is a hard error at parse time.
 #
-# What this phase does: run provision.sh inside the sandbox, wait for its
-# sentinel, then run the five-assertion health gate. Nothing here creates or
+# What this phase does: stream the HOST checkout's provision.sh into the sandbox
+# over ssh stdin (never the stale copy inside the VM's clone — the clone comes
+# from a third-party public repo this machine cannot push to, and gate A forbids
+# writing into the tracked app/ tree, so host-streaming is the only path a local
+# provisioner fix can take), wait for its sentinel, then run the five-assertion
+# health gate. Nothing here creates or
 # destroys a VM. On failure it prints how to get into the box and exits
 # non-zero, because a gate that auto-destroys throws away the evidence.
 #
@@ -77,8 +81,15 @@ setup RUN_ID CONFIG="":
     echo "[setup] 1/3 provisioning (streaming provision.sh output)"
     "${SSH[@]}" 'rm -f /tmp/PROVISION_READY' < /dev/null \
       || gate_fail "cannot reach ${HOST} over ssh"
-    # < /dev/null so ssh does not swallow this script's stdin; output streams live.
-    "${SSH[@]}" 'bash app/sandbox_mount/guest/provision.sh' < /dev/null \
+    # Stream the HOST working-tree provision.sh over ssh stdin and run it with
+    # `bash -s`, instead of the stale copy inside the VM's clone. The clone is a
+    # third-party public repo this machine cannot push to and gate A forbids
+    # writing into the tracked app/ tree, so host-streaming is the only path a
+    # local provisioner fix can reach the box. PROVISION_REPO_ROOT stays inside
+    # the single quotes so $HOME expands on the VM (the clone lives at ~/app);
+    # the file redirect replaces the old < /dev/null, which would swallow the
+    # script now that the script itself arrives on stdin. Output streams live.
+    "${SSH[@]}" 'PROVISION_REPO_ROOT="$HOME/app" bash -s' < sandbox_mount/guest/provision.sh \
       || gate_fail "provision.sh exited non-zero (its last '── step ──' line names the stage)"
 
     # ── 2. sentinel ──────────────────────────────────────────────────────────

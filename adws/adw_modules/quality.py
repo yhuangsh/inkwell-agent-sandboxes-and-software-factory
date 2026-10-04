@@ -81,7 +81,15 @@ def _load_checks(run) -> list[QualityCheckSpec]:
         return []
     manifest = yaml.safe_load(manifest_path.read_text()) or {}
     specs: list[QualityCheckSpec] = []
-    for entry in manifest.get("checks") or []:
+    # `checks:` has TWO documented shapes and BOTH must load:
+    #   MAP  — keys are check names, values are argv lists (spec 6159cbd5 Decision 2)
+    #   LIST — {name, area, operation, argv, timeout_seconds} mappings (inkwell's)
+    # A map entry has nowhere to state area/operation/timeout, so it takes the same
+    # defaults a half-filled list entry takes: backend / build / 120 s.
+    entries = manifest.get("checks") or []
+    if isinstance(entries, dict):
+        entries = [{"name": name, "argv": argv} for name, argv in entries.items()]
+    for entry in entries:
         name = entry["name"]
         outdir = str(_check_dir(run, name) / "bundle")
         argv = [str(arg).replace("{outdir}", outdir) for arg in entry["argv"]]

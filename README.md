@@ -129,7 +129,7 @@ install:                # shell commands run once at provision, from the app roo
   - bun install
 build: []               # e.g. ["bun run build"]; [] for interpret-and-serve apps
 serve:                  # optional — OBSERVE's app lane; no serve: means a library/CLI, skipped not failed
-  command: bun run server.ts
+  command: bun --hot server.ts   # --hot = live reload during development: Bun re-imports the module graph without restarting the server
   port: 4501            # the ONE port the exe.dev proxy exposes anonymously
   health_path: /        # OBSERVE curls https://<host><health_path> for 200
 checks:                 # optional — the SDLC quality gate, run from the app root
@@ -203,6 +203,15 @@ Fan-out is a loop over configs: one prompt, N rosters, N boxes. Teardown is neve
 </p>
 
 The main flow, top to bottom. Every command is a `just` recipe you could type by hand.
+
+**Lane mental model.** Steering and inspection are not the factory — keep the lanes apart:
+
+- **`just sbx run agent` / `just sbx run cmd` — steering and inspection.** `run agent` is ONE pi turn: no chains, no gates, no commits; its edits stay uncommitted working-tree changes in the sandbox. `run cmd` is the synchronous generic escape hatch that prints stdout.
+- **`just sbx lifecycle execute` — the factory.** The full SDLC with gates, reviews, and commits to the run branch `sbx/<run-id>`.
+- **`just sbx manage harvest` — bringing the run's commits home.** Safe and non-destructive; it never merges.
+- **`just sbx mount` / `just sbx lifecycle teardown` — the only times a sandbox is created or destroyed.** A fresh mount is for a clean box, never needed just to test a change.
+
+The app process starts once at `observe` and does not hot-reload unless the app's own manifest opts in — see the `serve:` example in [The app contract](#the-app-contract).
 
 ### 0. Prerequisites
 

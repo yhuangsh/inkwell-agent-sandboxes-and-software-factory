@@ -298,6 +298,210 @@ Four ideas carry the whole system:
 
 ---
 
+## From zero to hero: your first sandbox run
+
+The sections above are the *what* and the *why*. This is the whole loop typed once, end to end, on an app you create in the next five minutes. Every command is a `just` recipe you could type by hand; everything is copy-pasteable except the placeholders `<you>` and `<app>`.
+
+### 1. Create the app repo on GitHub
+
+```bash
+gh repo create <you>/<app> --public --clone     # or --private — see below
+cd <app>
+```
+
+A **public** repo clones unauthenticated, with zero config. A `--private` repo clones inside the sandbox only if `APP_REPO_GIT_TOKEN` is set in the host `.env`; the full story is the **Private app repo** paragraph in [Set up a new app and develop in a sandbox](#set-up-a-new-app-and-develop-in-a-sandbox).
+
+Seed the repo with the four files of the [`hello-server`](https://github.com/yhuangsh/hello-server.git) shape:
+
+`package.json`:
+```json
+{
+  "name": "hello-server",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": { "start": "bun run server.ts" }
+}
+```
+
+`server.ts`:
+```ts
+export function greet(name: string): string {
+  return `hello, ${name}`;
+}
+
+if (import.meta.main) {
+  const port = Number(process.env.PORT ?? 4501);
+  Bun.serve({ port, fetch: () => new Response(greet("world") + "\n") });
+  console.log(`hello-server on :${port}`);
+}
+```
+
+`server.test.ts`:
+```ts
+import { describe, expect, test } from "bun:test";
+import { greet } from "./server";
+
+describe("greet", () => {
+  test("greets by name", () => {
+    expect(greet("sssf")).toBe("hello, sssf");
+  });
+});
+```
+
+`sssf.app.yaml`, at the repo root — the app contract, key by key, is [The app contract](#the-app-contract):
+```yaml
+runtime: bun
+install:
+  - bun install
+build: []
+serve:
+  command: bun run server.ts
+  port: 4501
+  health_path: /
+checks:
+  test: [bun, test, server.test.ts]
+```
+
+```bash
+git add -A && git commit -m "Seed app with sssf manifest" && git push
+```
+
+### 2. Write the roster
+
+The one per-app input that lives *in this repo* is a roster file. Start from the shipped example and edit its `app:` block:
+
+```bash
+cp adws/adw_sssf_config/sssf.hello.config.yaml adws/adw_sssf_config/sssf.myapp.config.yaml
+```
+
+In `adws/adw_sssf_config/sssf.myapp.config.yaml`, set:
+
+```yaml
+app:
+  repo: https://github.com/<you>/<app>.git
+  ref: main
+  path: target
+  manifest: sssf.app.yaml
+```
+
+Then point the factory at your roster:
+
+```bash
+echo 'SSSF_CONFIG=adws/adw_sssf_config/sssf.myapp.config.yaml' >> .env
+```
+
+The roster also needs its providers' API keys in `.env` — `.env.sample` lists the allowlist, and FILL fails fast naming any missing one.
+
+### 3. Verify prerequisites
+
+```bash
+just sbx manage doctor            # five checks; must end with: sbx doctor: OK
+```
+
+`doctor` runs five checks: ssh exe.dev reachable, the run-record helper runs, the provisioner is present, the active roster's provider keys are set, and the adw layer resolves. The exe.dev account and `ssh exe.dev whoami` are covered in [Install](#install).
+
+### 4. Mount
+
+```bash
+just sbx mount my-run             # create -> fill -> setup -> observe (~10s)
+```
+
+`mount` chains four of the six phases — **create → fill → setup → observe** — and stops at `observe` on purpose: teardown is never chained.
+
+What happens inside:
+
+- **create** boots a blank VM for the run.
+- **fill** clones the factory to `~/app` and your app to `~/app/target` on the VM, opening the run branch `sbx/my-run` on the app clone.
+- **setup** runs the **host-streamed provisioner** — the host checkout's `sandbox_mount/guest/provision.sh`, piped over ssh (`bash -s`, never the VM's own copy) — which bootstraps bun, just, and node+npm from their own CDNs and installs **pi at registry-latest**, then runs your manifest's `install:`/`build:`. **apt never.** Then it runs the five-assertion health gate:
+  - **A** git integrity — factory HEAD + target HEAD match the run record, factory tree clean
+  - **B** pi is current (== registry latest) and `--list-models` is non-empty
+  - **C** a roster ping answers through the sandbox's own pi
+  - **D** a live call reports non-zero cost
+  - **E** every roster provider has its env key
+- **observe** starts your app on the manifest's `serve.port` (**4501** — the one anonymously exposed port) and the trace UI on **4600**, auth-gated to exe.dev users with VM access, then prints both URLs:
+
+```
+  app  https://<vm>.exe.xyz/
+  obs  https://<vm>.exe.xyz:4600/
+```
+
+`mount` ends by printing the run id and the four next-step commands:
+
+```
+mounted: my-run
+  execute: just sbx lifecycle execute my-run "<prompt>"
+  agent:   just sbx run agent my-run "<prompt>"
+  harvest: just sbx manage harvest my-run
+  destroy: just sbx lifecycle teardown my-run
+```
+
+### 5. Develop
+
+```bash
+just sbx lifecycle execute my-run "add a /health endpoint that returns {\"status\":\"ok\"}"
+```
+
+The recipe is `execute RUN_ID PROMPT CONFIG="" ADW="sdlc" *EXTRA`: the prompt is argument 2, and the ADW chain is **argument 4**, so picking a chain means an empty-string placeholder for CONFIG:
+
+```bash
+just sbx lifecycle execute my-run "add a /health endpoint" "" simple-sdlc
+```
+
+(`sdlc` is the default; the chain names are `just adw` recipes, e.g. `simple-sdlc`.)
+
+`execute` is **detached**: it returns and records a PID, one SDLC per box at a time, and `run.log` is truncated on every execute.
+
+Monitor it:
+
+- `just sbx run cmd my-run 'tail -f run.log'` — the synchronous escape hatch.
+- the trace UI on `:4600`, already running from `observe`.
+- the trace db lives **inside the sandbox** at `~/app/adws/adw_data/sssf.db`. The `just obs` recipes (`just obs sessions`, `just obs phases <adw_id>`, `just obs tail <adw_id>`) read `adws/adw_data/sssf.db` relative to the working directory, so querying the box's db from the host goes through the escape hatch:
+
+```bash
+just sbx run cmd my-run 'just obs sessions'
+just sbx run cmd my-run 'just obs phases <adw_id>'
+```
+
+Two handles, do not confuse them: **`<run-id>`** names the sandbox and is what `just sbx ...` takes, while **`<adw_id>`** names one factory run inside that box and is what `just obs ...` takes. The full distinction is in [Set up a new app and develop in a sandbox](#set-up-a-new-app-and-develop-in-a-sandbox).
+
+### 6. Harvest
+
+```bash
+just sbx manage harvest my-run
+```
+
+In target mode (your roster's `app.repo` is set), harvest bundles the run branch's commits off the VM and fetches them into a bare cache of your app repo at `.sandbox/repos/<app>.git` as `refs/sandbox/my-run`, leaving the bundle at `.sandbox/runs/my-run.bundle`. It prints the two read commands:
+
+```bash
+git -C .sandbox/repos/<app>.git log --oneline --graph <base>..refs/sandbox/my-run
+git -C .sandbox/repos/<app>.git diff <base>..refs/sandbox/my-run
+```
+
+Harvest never merges and never touches a branch you own — safe to run any time, idempotent on re-run.
+
+### 7. Teardown
+
+```bash
+just sbx lifecycle teardown my-run
+```
+
+Teardown is always an explicit human decision, never chained — the reason `mount` stops at `observe`. Its order is **artifacts → harvest → destroy → close the run record**; harvest is on by default here too, and a harvest failure **aborts before destroy**. The only flag is `--no-harvest`.
+
+### 8. Iterate
+
+Re-run work on the same box with another `just sbx lifecycle execute`, or refresh the code with a re-fill:
+
+```bash
+just sbx lifecycle fill my-run            # idempotent: fetches, ff-only, never resets over run commits
+just sbx lifecycle fill my-run <sha>      # pin the FACTORY clone to a sha
+```
+
+Re-fill switches to the run branch `sbx/my-run` and advances it ff-only, never re-creating it. The optional `<sha>` pins the **factory** clone; your **app** clone is pinned by the roster's `app.ref`.
+
+The loop is one line: edit prompt → execute → watch → harvest → teardown. The command tiers are in [Who commands what](#who-commands-what); the observability surface is in [Watch it run](#watch-it-run).
+
+---
+
 ## Watch it run
 
 <p align="center">
